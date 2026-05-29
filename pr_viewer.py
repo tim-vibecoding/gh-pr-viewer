@@ -372,9 +372,9 @@ def render_pr(pr):
         '<li class="pr">'
         '<div class="pr-row">'
         f'<span class="pr-title"><a href="{url}">#{number}</a> {title}</span>'
-        f'{draft}{base_note}{approval}'
+        f'{draft}{base_note}'
         '</div>'
-        f'<div class="checks">{check_pills}</div>'
+        f'<div class="checks">{check_pills}{approval}</div>'
         f'{children_html}'
         '</li>'
     )
