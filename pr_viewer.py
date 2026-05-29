@@ -55,6 +55,9 @@ fragment prFields on PullRequest {
   latestReviews(last: 20) {
     nodes { author { login } state submittedAt }
   }
+  reviewRequests(last: 20) {
+    nodes { requestedReviewer { ... on User { login } } }
+  }
   statusCheckRollup {
     state
     contexts(last: 100) {
@@ -225,7 +228,22 @@ def review_state(pr):
         return "changes", "Changes requested"
 
     reviews = (pr.get("latestReviews") or {}).get("nodes") or []
-    if any((r.get("state") or "") == "COMMENTED" for r in reviews):
+    commenters = {
+        (r.get("author") or {}).get("login")
+        for r in reviews
+        if (r.get("state") or "") == "COMMENTED"
+    }
+    commenters.discard(None)
+
+    # If a reviewer has been re-requested, their earlier comment is stale.
+    requested = {
+        (n.get("requestedReviewer") or {}).get("login")
+        for n in (pr.get("reviewRequests") or {}).get("nodes") or []
+    }
+    requested.discard(None)
+
+    # Only show "Commented" if at least one commenter hasn't been re-requested.
+    if commenters - requested:
         return "commented", "Commented"
     return "none", "No reviews"
 
