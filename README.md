@@ -18,10 +18,10 @@ The README was also vibecoded except for this sentence.
 - Fetches all **open** PRs for a GitHub user (default: the authenticated user).
 - Groups PRs by repository and reconstructs **stacks/trees** by chaining each
   PR's base branch to the head branch of another open PR.
-- For each PR, shows three status pills rolling up its checks:
-  - **Other** — every check not covered by the two buckets below.
+- For each PR, shows two status pills rolling up its checks:
+  - **Main** — every check not covered by the E2E bucket.
   - **E2E** — checks whose name contains `E2E Tests`.
-  - **Require Review** — the check named `Require Review or Audit Label`.
+  - The `Require Review or Audit Label` check is filtered out entirely.
 - Shows the **review state**: Approved, Changes requested, Commented
   (no approval), or No reviews.
 - Renders everything as a static HTML page (inline CSS, light/dark aware, no

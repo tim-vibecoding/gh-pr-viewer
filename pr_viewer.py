@@ -141,8 +141,6 @@ def _dedupe_contexts(nodes):
 
 
 def _bucket_for(name):
-    if name == REQUIRE_REVIEW_CHECK:
-        return "require_review"
     if any(sub in name for sub in E2E_SUBSTRINGS) or name.startswith("cypress:"):
         return "e2e"
     return "other"
@@ -181,12 +179,14 @@ def bucket_checks(pr):
     buckets = {
         "other": [],
         "e2e": [],
-        "require_review": [],
     }
     rollup = pr.get("statusCheckRollup")
     if rollup:
         for node in _dedupe_contexts(rollup["contexts"]["nodes"]):
             name = _check_name(node)
+            # The require-review check is informational noise; drop it entirely.
+            if name == REQUIRE_REVIEW_CHECK:
+                continue
             state = _normalize_check_state(node)
             # Skipped checks shouldn't count for or against a bucket.
             if state == "skipped":
@@ -358,7 +358,6 @@ def render_pr(pr):
     check_pills = "".join([
         render_pill("Main", checks["other"]),
         render_pill("E2E", checks["e2e"]),
-        render_pill("Review", checks["require_review"]),
     ])
 
     children_html = ""
