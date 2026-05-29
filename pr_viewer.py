@@ -15,7 +15,7 @@ import webbrowser
 from collections import defaultdict
 
 REQUIRE_REVIEW_CHECK = "Require Review or Audit Label"
-E2E_SUBSTRING = "E2E Tests"
+E2E_SUBSTRINGS = ("E2E Tests", "E2E Setup")
 
 # When --user is omitted we resolve the authenticated user via `viewer`.
 QUERY_VIEWER = """
@@ -143,7 +143,7 @@ def _dedupe_contexts(nodes):
 def _bucket_for(name):
     if name == REQUIRE_REVIEW_CHECK:
         return "require_review"
-    if E2E_SUBSTRING in name or name.startswith("cypress:"):
+    if any(sub in name for sub in E2E_SUBSTRINGS) or name.startswith("cypress:"):
         return "e2e"
     return "other"
 
