@@ -60,8 +60,8 @@ fragment prFields on PullRequest {
     contexts(last: 100) {
       nodes {
         __typename
-        ... on CheckRun { name conclusion status detailsUrl }
-        ... on StatusContext { context state targetUrl }
+        ... on CheckRun { name conclusion status detailsUrl startedAt completedAt }
+        ... on StatusContext { context state targetUrl createdAt }
       }
     }
   }
@@ -114,10 +114,36 @@ def _check_name(node):
     return node.get("name") or ""
 
 
+def _check_timestamp(node):
+    """Best-available timestamp for ordering runs of the same check."""
+    return (
+        node.get("completedAt")
+        or node.get("startedAt")
+        or node.get("createdAt")
+        or ""
+    )
+
+
+def _dedupe_contexts(nodes):
+    """Collapse multiple runs of the same check name to the most recent one.
+
+    GitHub's PR UI shows only the latest run per check name; without this a
+    stale run (e.g. a CANCELLED retry) can mask the current passing result.
+    ISO 8601 timestamps sort lexicographically, so max() picks the newest.
+    """
+    latest = {}
+    for node in nodes:
+        name = _check_name(node)
+        existing = latest.get(name)
+        if existing is None or _check_timestamp(node) >= _check_timestamp(existing):
+            latest[name] = node
+    return list(latest.values())
+
+
 def _bucket_for(name):
     if name == REQUIRE_REVIEW_CHECK:
         return "require_review"
-    if E2E_SUBSTRING in name:
+    if E2E_SUBSTRING in name or name.startswith("cypress:"):
         return "e2e"
     return "other"
 
@@ -144,7 +170,9 @@ def _normalize_check_state(node):
         return "failure"
     if conclusion in ("SUCCESS",):
         return "success"
-    # NEUTRAL, SKIPPED, STALE, or anything else
+    if conclusion in ("SKIPPED", "STALE"):
+        return "skipped"
+    # NEUTRAL or anything else
     return "neutral"
 
 
@@ -157,9 +185,13 @@ def bucket_checks(pr):
     }
     rollup = pr.get("statusCheckRollup")
     if rollup:
-        for node in rollup["contexts"]["nodes"]:
+        for node in _dedupe_contexts(rollup["contexts"]["nodes"]):
             name = _check_name(node)
-            buckets[_bucket_for(name)].append(_normalize_check_state(node))
+            state = _normalize_check_state(node)
+            # Skipped checks shouldn't count for or against a bucket.
+            if state == "skipped":
+                continue
+            buckets[_bucket_for(name)].append(state)
 
     result = {}
     for bucket, states in buckets.items():
