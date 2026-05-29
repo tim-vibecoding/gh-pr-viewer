@@ -194,7 +194,7 @@ def review_state(pr):
 
     reviews = (pr.get("latestReviews") or {}).get("nodes") or []
     if any((r.get("state") or "") == "COMMENTED" for r in reviews):
-        return "commented", "Commented (no approval)"
+        return "commented", "Commented"
     return "none", "No reviews"
 
 
@@ -256,12 +256,12 @@ h1 { font-size: 1.5rem; }
 h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
 ul.tree { list-style: none; padding-left: 0; }
 ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: .4rem; }
-li.pr { margin: .5rem 0; }
+li.pr { margin: 1rem 0; }
 .pr-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .pr-title a { color: #0969da; text-decoration: none; font-weight: 600; }
 .pr-title a:hover { text-decoration: underline; }
 .draft { font-size: .75rem; background: #6e7781; color: #fff; border-radius: 1rem; padding: 0 .5rem; }
-.pills { display: flex; flex-wrap: wrap; gap: .35rem; }
+.checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; }
 .pill {
   font-size: .75rem; border-radius: 1rem; padding: .1rem .6rem;
   white-space: nowrap; border: 1px solid transparent;
@@ -294,7 +294,8 @@ CHECK_GLYPH = {
 
 def render_pill(label, info):
     glyph = CHECK_GLYPH[info["state"]]
-    if info["total"]:
+    # Counts only add signal when something isn't passing.
+    if info["total"] and info["state"] != "success":
         count = f" {info['passed']}/{info['total']}"
     else:
         count = ""
@@ -321,11 +322,11 @@ def render_pr(pr):
     if base != default_branch:
         base_note = f'<span class="base-note">(base: {html.escape(base)})</span>'
 
-    pills = "".join([
-        render_pill("Other", checks["other"]),
+    approval = f'<span class="pill {rstate}">{html.escape(rlabel)}</span>'
+    check_pills = "".join([
+        render_pill("Main", checks["other"]),
         render_pill("E2E", checks["e2e"]),
-        render_pill("Require Review", checks["require_review"]),
-        f'<span class="pill {rstate}">{html.escape(rlabel)}</span>',
+        render_pill("Review", checks["require_review"]),
     ])
 
     children_html = ""
@@ -340,9 +341,9 @@ def render_pr(pr):
         '<li class="pr">'
         '<div class="pr-row">'
         f'<span class="pr-title"><a href="{url}">#{number}</a> {title}</span>'
-        f'{draft}{base_note}'
-        f'<span class="pills">{pills}</span>'
+        f'{draft}{base_note}{approval}'
         '</div>'
+        f'<div class="checks">{check_pills}</div>'
         f'{children_html}'
         '</li>'
     )
