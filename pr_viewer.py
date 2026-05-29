@@ -287,13 +287,18 @@ body {
 h1 { font-size: 1.5rem; }
 h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
 ul.tree { list-style: none; padding-left: 0; }
-ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: .4rem; }
+ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: 1.35rem; }
 li.pr { margin: 1rem 0; }
 .pr-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .pr-title a { color: #0969da; text-decoration: none; font-weight: 600; }
 .pr-title a:hover { text-decoration: underline; }
-.draft { font-size: .75rem; background: #6e7781; color: #fff; border-radius: 1rem; padding: 0 .5rem; }
-.checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; }
+.draft-dot {
+  display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+  margin-right: .4rem; flex: none; background: #1faa42;
+}
+.draft-dot.is-draft { background: #aab1b9; }
+.draft { font-size: .75rem; background: transparent; color: #6e7781; border: 1px solid #d0d7de; border-radius: 1rem; padding: 0 .5rem; }
+.checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: .95rem; }
 .pill {
   font-size: .75rem; border-radius: 1rem; padding: .1rem .6rem;
   white-space: nowrap; border: 1px solid transparent;
@@ -312,7 +317,9 @@ li.pr { margin: 1rem 0; }
   h2 { border-color: #444c56; }
   ul.tree ul.tree { border-color: #444c56; }
   .pr-title a { color: #539bf5; }
-  .draft { background: #545d68; }
+  .draft-dot { background: #6bc46d; }
+  .draft { background: transparent; color: #768390; border-color: #444c56; }
+  .draft-dot.is-draft { background: #768390; }
   .base-note, .empty { color: #768390; }
   .pill.success, .pill.approved  { background: #1b3329; color: #6bc46d; border-color: #2b5a3e; }
   .pill.failure, .pill.changes   { background: #3a2426; color: #e5707a; border-color: #62383c; }
@@ -350,7 +357,11 @@ def render_pr(pr):
     number = pr["number"]
     title = html.escape(pr["title"])
     url = html.escape(pr["url"], quote=True)
-    draft = '<span class="draft">draft</span>' if pr.get("isDraft") else ""
+    is_draft = pr.get("isDraft")
+    draft_cls = "draft-dot is-draft" if is_draft else "draft-dot"
+    draft_title = ' title="Draft"' if is_draft else ""
+    draft_dot = f'<span class="{draft_cls}"{draft_title}></span>'
+    draft = '<span class="draft">draft</span>' if is_draft else ""
 
     # Annotate roots whose base branch is not the default and has no open PR
     # (i.e. the parent PR is closed/merged or otherwise absent).
@@ -377,7 +388,7 @@ def render_pr(pr):
     return (
         '<li class="pr">'
         '<div class="pr-row">'
-        f'<span class="pr-title"><a href="{url}">#{number}</a> {title}</span>'
+        f'<span class="pr-title">{draft_dot}<a href="{url}">#{number}</a> {title}</span>'
         f'{draft}{base_note}'
         '</div>'
         f'<div class="checks">{check_pills}{approval}</div>'
