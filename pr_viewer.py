@@ -282,7 +282,7 @@ CSS = """
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   margin: 2rem auto; max-width: 60rem; padding: 0 1rem; line-height: 1.5;
-  color: #1f2328; background: #fff;
+  color: #1f2328; background: #f6f8fa;
 }
 h1 { font-size: 1.5rem; }
 h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
@@ -308,10 +308,16 @@ li.pr { margin: 1rem 0; }
 .base-note { font-size: .75rem; color: #57606a; }
 .empty { color: #57606a; font-style: italic; }
 @media (prefers-color-scheme: dark) {
-  body { color: #e6edf3; background: #0d1117; }
-  h2 { border-color: #30363d; }
-  ul.tree ul.tree { border-color: #30363d; }
-  .pr-title a { color: #2f81f7; }
+  body { color: #cdd9e5; background: #22272e; }
+  h2 { border-color: #444c56; }
+  ul.tree ul.tree { border-color: #444c56; }
+  .pr-title a { color: #539bf5; }
+  .draft { background: #545d68; }
+  .base-note, .empty { color: #768390; }
+  .pill.success, .pill.approved  { background: #1b3329; color: #6bc46d; border-color: #2b5a3e; }
+  .pill.failure, .pill.changes   { background: #3a2426; color: #e5707a; border-color: #62383c; }
+  .pill.pending, .pill.commented { background: #3a3320; color: #d9b850; border-color: #5e5230; }
+  .pill.neutral, .pill.none      { background: #2d333b; color: #909dab; border-color: #444c56; }
 }
 """
 
