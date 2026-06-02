@@ -81,6 +81,43 @@ different user's PRs without restarting the server (e.g.
 (`127.0.0.1`) by default; pass `--host 0.0.0.0` only if you really want to
 expose it. Press `Ctrl-C` to stop.
 
+### Running the server at login (macOS)
+
+To keep the server running in the background and start it automatically every
+time you log in, install it as a [LaunchAgent](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html).
+A helper script generates the `launchd` plist and loads it for you:
+
+```bash
+# Install with defaults (your own PRs, 127.0.0.1:8765):
+scripts/install-launchagent.sh
+
+# Pick a user / port:
+scripts/install-launchagent.sh --user octocat --port 9000
+
+# Remove it later:
+scripts/install-launchagent.sh --uninstall
+```
+
+The script writes `~/Library/LaunchAgents/com.github-pr-viewer.server.plist`
+and loads it immediately, so the server starts now and on every subsequent
+login. `KeepAlive` is set, so `launchd` restarts the server if it ever exits.
+Output is logged to `pr_server.log` in the repo directory.
+
+Once it's running, just open `http://127.0.0.1:8765/` (or your chosen port).
+The agent reuses your existing `gh` auth, so make sure you've run
+`gh auth login` first.
+
+A couple of useful `launchctl` commands:
+
+```bash
+# Check it's loaded:
+launchctl list | grep github-pr-viewer
+
+# Stop/start without uninstalling:
+launchctl unload ~/Library/LaunchAgents/com.github-pr-viewer.server.plist
+launchctl load   ~/Library/LaunchAgents/com.github-pr-viewer.server.plist
+```
+
 ## How stacks are detected
 
 A PR is treated as a **child** of another open PR (in the same repo) when its
@@ -104,6 +141,8 @@ github-pr-viewer/
   pr_viewer.py            # CLI entry point (one-shot render + open browser)
   pr_server.py            # local HTTP server entry point (stdlib http.server)
   pr_core.py              # shared engine: fetch, process, render HTML
+  scripts/
+    install-launchagent.sh  # install/remove the macOS login LaunchAgent
   README.md               # this file
   vibe-prompts/initial-creation/
     PROMPT.md             # the prompt that kicked it off
