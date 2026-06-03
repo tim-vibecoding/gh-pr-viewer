@@ -333,7 +333,6 @@ li.pr { margin: 1rem 0; }
 .pill.approved  { background: #dafbe1; color: #1a7f37; border-color: #b6e9c1; }
 .pill.changes   { background: #ffebe9; color: #cf222e; border-color: #ffc1bc; }
 .pill.commented { background: #fff8c5; color: #9a6700; border-color: #f0e2a0; }
-.branch-row { margin-left: .95rem; margin-top: .2rem; }
 .branches { display: inline-flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
 .branch { display: inline-flex; align-items: center; gap: .2rem; }
 .branch-name {
@@ -468,9 +467,8 @@ def render_pr(pr, is_root=True):
         '<li class="pr">'
         '<div class="pr-row">'
         f'<span class="pr-title">{draft_dot}<a href="{url}">#{number}</a> {title}</span>'
-        f'{draft}'
+        f'{draft}{branch_label}'
         '</div>'
-        f'<div class="branch-row">{branch_label}</div>'
         f'<div class="checks">{check_pills}{approval}</div>'
         f'{children_html}'
         '</li>'
