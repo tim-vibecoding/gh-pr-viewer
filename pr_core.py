@@ -333,7 +333,21 @@ li.pr { margin: 1rem 0; }
 .pill.approved  { background: #dafbe1; color: #1a7f37; border-color: #b6e9c1; }
 .pill.changes   { background: #ffebe9; color: #cf222e; border-color: #ffc1bc; }
 .pill.commented { background: #fff8c5; color: #9a6700; border-color: #f0e2a0; }
-.base-note { font-size: .75rem; color: #57606a; }
+.branch-row { margin-left: .95rem; margin-top: .2rem; }
+.branches { display: inline-flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.branch { display: inline-flex; align-items: center; gap: .2rem; }
+.branch-name {
+  font-size: .75rem; background: #eaeef2; color: #57606a;
+  border-radius: .4rem; padding: .05rem .4rem;
+}
+.branch-arrow { color: #57606a; font-size: .8rem; }
+.copy-btn {
+  font-size: .7rem; line-height: 1; cursor: pointer;
+  background: transparent; border: 1px solid #d0d7de; border-radius: .4rem;
+  color: #57606a; padding: .1rem .3rem;
+}
+.copy-btn:hover { background: #eaeef2; }
+.copy-btn.copied { color: #1a7f37; border-color: #b6e9c1; }
 .empty { color: #57606a; font-style: italic; }
 @media (prefers-color-scheme: dark) {
   body { color: #cdd9e5; background: #22272e; }
@@ -343,7 +357,12 @@ li.pr { margin: 1rem 0; }
   .draft-dot { background: #6bc46d; }
   .draft { background: transparent; color: #768390; border-color: #444c56; }
   .draft-dot.is-draft { background: #768390; }
-  .base-note, .empty { color: #768390; }
+  .empty { color: #768390; }
+  .branch-name { background: #2d333b; color: #adbac7; }
+  .branch-arrow { color: #768390; }
+  .copy-btn { border-color: #444c56; color: #768390; }
+  .copy-btn:hover { background: #2d333b; }
+  .copy-btn.copied { color: #6bc46d; border-color: #2b5a3e; }
   .pill.success, .pill.approved  { background: #1b3329; color: #6bc46d; border-color: #2b5a3e; }
   .pill.failure, .pill.changes   { background: #3a2426; color: #e5707a; border-color: #62383c; }
   .pill.pending, .pill.commented { background: #3a3320; color: #d9b850; border-color: #5e5230; }
@@ -360,6 +379,36 @@ CHECK_GLYPH = {
 }
 
 
+COPY_SCRIPT = """
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('.copy-btn');
+  if (!btn) return;
+  var name = btn.getAttribute('data-branch');
+  navigator.clipboard.writeText(name).then(function () {
+    var old = btn.textContent;
+    btn.textContent = '✓';
+    btn.classList.add('copied');
+    setTimeout(function () {
+      btn.textContent = old;
+      btn.classList.remove('copied');
+    }, 1000);
+  });
+});
+"""
+
+
+def render_branch(name):
+    safe = html.escape(name)
+    attr = html.escape(name, quote=True)
+    return (
+        '<span class="branch">'
+        f'<code class="branch-name">{safe}</code>'
+        f'<button type="button" class="copy-btn" data-branch="{attr}" '
+        f'title="Copy branch name" aria-label="Copy branch name">⧉</button>'
+        '</span>'
+    )
+
+
 def render_pill(label, info):
     glyph = CHECK_GLYPH[info["state"]]
     # Counts only add signal when something isn't passing.
@@ -373,7 +422,7 @@ def render_pill(label, info):
     )
 
 
-def render_pr(pr):
+def render_pr(pr, is_root=True):
     checks = bucket_checks(pr)
     rstate, rlabel = review_state(pr)
 
@@ -386,13 +435,20 @@ def render_pr(pr):
     draft_dot = f'<span class="{draft_cls}"{draft_title}></span>'
     draft = '<span class="draft">draft</span>' if is_draft else ""
 
-    # Annotate roots whose base branch is not the default and has no open PR
-    # (i.e. the parent PR is closed/merged or otherwise absent).
-    default_branch = (pr["repository"].get("defaultBranchRef") or {}).get("name")
+    # Top-level PRs show `base ← head`; stacked children show only their own
+    # head, since their base is the parent's head shown one level up.
     base = pr["baseRefName"]
-    base_note = ""
-    if base != default_branch:
-        base_note = f'<span class="base-note">(base: {html.escape(base)})</span>'
+    head = pr["headRefName"]
+    if is_root:
+        branch_label = (
+            '<span class="branches">'
+            f'{render_branch(base)}'
+            '<span class="branch-arrow">←</span>'
+            f'{render_branch(head)}'
+            '</span>'
+        )
+    else:
+        branch_label = f'<span class="branches">{render_branch(head)}</span>'
 
     approval = f'<span class="pill {rstate}">{html.escape(rlabel)}</span>'
     check_pills = "".join([
@@ -404,7 +460,7 @@ def render_pr(pr):
     if pr["_children"]:
         children_html = (
             '<ul class="tree">'
-            + "".join(render_pr(c) for c in pr["_children"])
+            + "".join(render_pr(c, is_root=False) for c in pr["_children"])
             + "</ul>"
         )
 
@@ -412,8 +468,9 @@ def render_pr(pr):
         '<li class="pr">'
         '<div class="pr-row">'
         f'<span class="pr-title">{draft_dot}<a href="{url}">#{number}</a> {title}</span>'
-        f'{draft}{base_note}'
+        f'{draft}'
         '</div>'
+        f'<div class="branch-row">{branch_label}</div>'
         f'<div class="checks">{check_pills}{approval}</div>'
         f'{children_html}'
         '</li>'
@@ -442,6 +499,7 @@ def render_html(login, repo_groups):
             parts.extend(render_pr(r) for r in roots)
             parts.append("</ul>")
 
+    parts.append(f"<script>{COPY_SCRIPT}</script>")
     parts.append("</body></html>")
     return "\n".join(parts)
 
