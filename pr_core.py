@@ -13,7 +13,7 @@ import json
 import subprocess
 from collections import defaultdict
 
-REQUIRE_REVIEW_CHECK = "Require Review or Audit Label"
+REQUIRE_REVIEW_CHECKS = ("Require Review or Audit Label", "Review Required")
 E2E_SUBSTRINGS = ("E2E Tests", "E2E Setup")
 
 
@@ -193,7 +193,7 @@ def bucket_checks(pr):
         for node in _dedupe_contexts(rollup["contexts"]["nodes"]):
             name = _check_name(node)
             # The require-review check is informational noise; drop it entirely.
-            if name == REQUIRE_REVIEW_CHECK:
+            if name in REQUIRE_REVIEW_CHECKS:
                 continue
             state = _normalize_check_state(node)
             # Skipped checks shouldn't count for or against a bucket.

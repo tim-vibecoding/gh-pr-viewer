@@ -94,6 +94,9 @@ scripts/install-launchagent.sh
 # Pick a user / port:
 scripts/install-launchagent.sh --user octocat --port 9000
 
+# Restart it (e.g. after pulling new code):
+scripts/restart-server.sh
+
 # Remove it later:
 scripts/install-launchagent.sh --uninstall
 ```
@@ -116,6 +119,9 @@ launchctl list | grep github-pr-viewer
 # Stop/start without uninstalling:
 launchctl unload ~/Library/LaunchAgents/com.github-pr-viewer.server.plist
 launchctl load   ~/Library/LaunchAgents/com.github-pr-viewer.server.plist
+
+# Restart in one step (or use scripts/restart-server.sh):
+launchctl kickstart -k gui/$(id -u)/com.github-pr-viewer.server
 ```
 
 ## How stacks are detected
@@ -143,6 +149,7 @@ github-pr-viewer/
   pr_core.py              # shared engine: fetch, process, render HTML
   scripts/
     install-launchagent.sh  # install/remove the macOS login LaunchAgent
+    restart-server.sh       # restart the running LaunchAgent
   README.md               # this file
   vibe-prompts/initial-creation/
     PROMPT.md             # the prompt that kicked it off
