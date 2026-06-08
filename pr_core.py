@@ -307,7 +307,11 @@ body {
   margin: 2rem auto; max-width: 60rem; padding: 0 1rem; line-height: 1.5;
   color: #1f2328; background: #f6f8fa;
 }
-h1 { font-size: 1.5rem; }
+h1 { font-size: 1.5rem; margin-bottom: .5rem; }
+nav.nav { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-bottom: 1.5rem; }
+nav.nav a { color: #0969da; text-decoration: none; font-size: .9rem; }
+nav.nav a:hover { text-decoration: underline; }
+nav.nav a:not(:last-child)::after { content: "|"; color: #d0d7de; margin-left: .75rem; }
 h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
 ul.tree { list-style: none; padding-left: 0; }
 ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: 1.35rem; }
@@ -483,6 +487,11 @@ def render_html(login, repo_groups):
         f"<title>Open PRs for {html.escape(login)}</title>",
         f"<style>{CSS}</style></head><body>",
         f"<h1>Open PRs for {html.escape(login)}</h1>",
+        '<nav class="nav">'
+        '<a href="https://github.com/pulls?q=is%3Apr+author%3A%40me+archived%3Afalse+is%3Aclosed">Closed PRs</a>'
+        '<a href="https://github.com/pulls?q=is%3Apr+is%3Aopen+user-review-requested%3A%40me+archived%3Afalse+">Review queue</a>'
+        '<a href="https://github.com/pulls?q=is%3Apr+label%3Aaudit+-label%3Areviewed+-review%3Aapproved+user-review-requested%3A%40me+archived%3Afalse">Audit queue</a>'
+        '</nav>',
     ]
 
     total_prs = sum(
