@@ -317,6 +317,11 @@ nav.nav a { color: #0969da; text-decoration: none; font-size: .9rem; }
 nav.nav a:hover { text-decoration: underline; }
 nav.nav a:not(:last-child)::after { content: "|"; color: #d0d7de; margin-left: .75rem; }
 h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
+h2 a.repo-link {
+  color: inherit;
+  text-decoration: underline;
+}
+h2 a.repo-link:hover { color: #0969da; }
 ul.tree { list-style: none; padding-left: 0; }
 ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: calc(.4rem + var(--dot-size) + var(--dot-gap)); }
 li.pr { margin: 1rem 0; }
@@ -359,6 +364,7 @@ li.pr { margin: 1rem 0; }
 @media (prefers-color-scheme: dark) {
   body { color: #cdd9e5; background: #22272e; }
   h2 { border-color: #444c56; }
+  h2 a.repo-link:hover { color: #539bf5; }
   ul.tree ul.tree { border-color: #444c56; }
   .pr-title a { color: #539bf5; }
   .draft-dot { background: #6bc46d; }
@@ -505,7 +511,10 @@ def render_html(login, repo_groups):
         parts.append('<p class="empty">No open pull requests found.</p>')
     else:
         for repo, roots in repo_groups:
-            parts.append(f"<h2>{html.escape(repo)}</h2>")
+            repo_url = html.escape(f"https://github.com/{repo}", quote=True)
+            parts.append(
+                f'<h2><a class="repo-link" href="{repo_url}">{html.escape(repo)}</a></h2>'
+            )
             parts.append('<ul class="tree">')
             parts.extend(render_pr(r) for r in roots)
             parts.append("</ul>")
