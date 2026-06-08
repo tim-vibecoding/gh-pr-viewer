@@ -301,7 +301,11 @@ def build_forest(prs):
 # ---------------------------------------------------------------------------
 
 CSS = """
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: light dark;
+  --dot-size: .7rem;   /* PR status dot diameter */
+  --dot-gap: .4rem;     /* space between the dot and the title text */
+}
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   margin: 2rem auto; max-width: 60rem; padding: 0 1rem; line-height: 1.5;
@@ -314,18 +318,18 @@ nav.nav a:hover { text-decoration: underline; }
 nav.nav a:not(:last-child)::after { content: "|"; color: #d0d7de; margin-left: .75rem; }
 h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
 ul.tree { list-style: none; padding-left: 0; }
-ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: 1.35rem; }
+ul.tree ul.tree { padding-left: 1.4rem; border-left: 2px solid #d0d7de; margin-left: calc(.4rem + var(--dot-size) + var(--dot-gap)); }
 li.pr { margin: 1rem 0; }
 .pr-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .pr-title a { color: #0969da; text-decoration: none; font-weight: 600; }
 .pr-title a:hover { text-decoration: underline; }
 .draft-dot {
-  display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
-  margin-right: .4rem; flex: none; background: #08bf37;
+  display: inline-block; width: var(--dot-size); height: var(--dot-size); border-radius: 50%;
+  margin-right: var(--dot-gap); flex: none; background: #08bf37;
 }
 .draft-dot.is-draft { background: #c1cad4; }
 .draft { font-size: .75rem; background: transparent; color: #6e7781; border: 1px solid #d0d7de; border-radius: 1rem; padding: 0 .5rem; }
-.checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: .95rem; }
+.checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: calc(var(--dot-size) + var(--dot-gap)); }
 .pill {
   font-size: .75rem; border-radius: 1rem; padding: .1rem .6rem;
   white-space: nowrap; border: 1px solid transparent;
