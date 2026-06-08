@@ -365,6 +365,8 @@ li.pr { margin: 1rem 0; }
   body { color: #cdd9e5; background: #22272e; }
   h2 { border-color: #444c56; }
   h2 a.repo-link:hover { color: #539bf5; }
+  nav.nav a { color: #539bf5; }
+  nav.nav a:not(:last-child)::after { color: #444c56; }
   ul.tree ul.tree { border-color: #444c56; }
   .pr-title a { color: #539bf5; }
   .draft-dot { background: #6bc46d; }
