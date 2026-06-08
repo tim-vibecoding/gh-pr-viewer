@@ -321,9 +321,9 @@ li.pr { margin: 1rem 0; }
 .pr-title a:hover { text-decoration: underline; }
 .draft-dot {
   display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
-  margin-right: .4rem; flex: none; background: #1faa42;
+  margin-right: .4rem; flex: none; background: #08bf37;
 }
-.draft-dot.is-draft { background: #aab1b9; }
+.draft-dot.is-draft { background: #c1cad4; }
 .draft { font-size: .75rem; background: transparent; color: #6e7781; border: 1px solid #d0d7de; border-radius: 1rem; padding: 0 .5rem; }
 .checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: .95rem; }
 .pill {
