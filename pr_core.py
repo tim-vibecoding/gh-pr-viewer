@@ -368,11 +368,11 @@ li.pr { margin: 1rem 0; }
 .pr-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .pr-title a { color: var(--accent); text-decoration: none; font-weight: 600; }
 .pr-title a:hover { text-decoration: underline; }
-.draft-dot {
+.status-dot {
   display: inline-block; width: var(--dot-size); height: var(--dot-size); border-radius: 50%;
   margin-right: var(--dot-gap); flex: none; background: var(--dot-active);
 }
-.draft-dot.is-draft { background: var(--dot-draft); }
+.status-dot.is-draft { background: var(--dot-draft); }
 .draft { font-size: .75rem; background: transparent; color: var(--draft-text); border: 1px solid var(--border); border-radius: 1rem; padding: 0 .5rem; }
 .checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: calc(var(--dot-size) + var(--dot-gap)); }
 .pill {
@@ -460,9 +460,9 @@ def render_pr(pr, is_root=True):
     title = html.escape(pr["title"])
     url = html.escape(pr["url"], quote=True)
     is_draft = pr.get("isDraft")
-    draft_cls = "draft-dot is-draft" if is_draft else "draft-dot"
-    draft_title = ' title="Draft"' if is_draft else ""
-    draft_dot = f'<span class="{draft_cls}"{draft_title}></span>'
+    dot_cls = "status-dot is-draft" if is_draft else "status-dot"
+    dot_title = ' title="Draft"' if is_draft else ""
+    status_dot = f'<span class="{dot_cls}"{dot_title}></span>'
     draft = '<span class="draft">draft</span>' if is_draft else ""
 
     # Top-level PRs show `base ← head`; stacked children show only their own
@@ -497,7 +497,7 @@ def render_pr(pr, is_root=True):
     return (
         '<li class="pr">'
         '<div class="pr-row">'
-        f'<span class="pr-title">{draft_dot}<a href="{url}">#{number}</a> {title}</span>'
+        f'<span class="pr-title">{status_dot}<a href="{url}">#{number}</a> {title}</span>'
         f'{draft}{branch_label}'
         '</div>'
         f'<div class="checks">{check_pills}{approval}</div>'
