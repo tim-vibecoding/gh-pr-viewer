@@ -227,12 +227,15 @@ def bucket_checks(pr):
 def review_state(pr):
     """Return (state_class, label) describing the PR's review status."""
     decision = pr.get("reviewDecision")
+    reviews = (pr.get("latestReviews") or {}).get("nodes") or []
     if decision == "APPROVED":
+        approvals = sum(1 for r in reviews if (r.get("state") or "") == "APPROVED")
+        if approvals > 1:
+            return "approved", f"Approved {approvals}x"
         return "approved", "Approved"
     if decision == "CHANGES_REQUESTED":
         return "changes", "Changes requested"
 
-    reviews = (pr.get("latestReviews") or {}).get("nodes") or []
     commenters = {
         (r.get("author") or {}).get("login")
         for r in reviews
