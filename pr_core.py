@@ -56,6 +56,9 @@ fragment prFields on PullRequest {
   baseRefName
   headRefName
   repository { nameWithOwner defaultBranchRef { name } }
+  labels(first: 20) { nodes { name } }
+  mergeStateStatus
+  mergeQueueEntry { state position }
   reviewDecision
   latestReviews(last: 20) {
     nodes { author { login } state submittedAt }
@@ -257,6 +260,44 @@ def review_state(pr):
 
 
 # ---------------------------------------------------------------------------
+# Deploy PRs (merge-queue / integration-branch)
+# ---------------------------------------------------------------------------
+
+def is_deploy_pr(pr):
+    """True if the PR carries the `integration-branch` label (a deploy PR)."""
+    labels = (pr.get("labels") or {}).get("nodes") or []
+    return any((l.get("name") or "") == "integration-branch" for l in labels)
+
+
+def merge_queue_state(pr):
+    """Return (state_class, label) describing a deploy PR's merge-queue status.
+
+    Mirrors review_state's shape so it slots into the existing pill rendering.
+    """
+    entry = pr.get("mergeQueueEntry")
+    merge_status = pr.get("mergeStateStatus")
+    rollup = (pr.get("statusCheckRollup") or {}).get("state")
+
+    # Branch is out of date and must be updated before it can merge.
+    if merge_status == "BEHIND":
+        return "failure", "Update branch"
+
+    if entry is None:
+        # Checks are green but it never got enqueued — something's wrong.
+        if rollup == "SUCCESS":
+            return "failure", "Not queued"
+        return "neutral", "Not queued"
+
+    state = entry.get("state")
+    if state == "LOCKED":            # at the front, actively merging/deploying
+        return "deploying", "Deploying"
+    # QUEUED / AWAITING_CHECKS / MERGEABLE → waiting in the queue
+    pos = entry.get("position")
+    label = "In queue" if pos is None else f"In queue (#{pos + 1})"
+    return "pending", label
+
+
+# ---------------------------------------------------------------------------
 # Hierarchy / stack detection
 # ---------------------------------------------------------------------------
 
@@ -321,11 +362,13 @@ CSS = """
   --branch-fg: #57606a;     /* branch chip text */
   --dot-active: #08bf37;    /* non-draft PR status dot */
   --dot-draft: #c1cad4;     /* draft PR status dot */
+  --dot-deploy: #8250df;    /* deploy PR status dot */
 
   --success-bg: #dafbe1; --success-fg: #1a7f37; --success-border: #b6e9c1;
   --failure-bg: #ffebe9; --failure-fg: #cf222e; --failure-border: #ffc1bc;
   --pending-bg: #fff8c5; --pending-fg: #9a6700; --pending-border: #f0e2a0;
   --neutral-bg: #f0f2f4; --neutral-fg: #57606a; --neutral-border: #d8dde3;
+  --deploy-bg: #f3e8ff; --deploy-fg: #8250df; --deploy-border: #e2c7ff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -339,11 +382,13 @@ CSS = """
     --branch-fg: #adbac7;
     --dot-active: #6bc46d;
     --dot-draft: #768390;
+    --dot-deploy: #b083f0;
 
     --success-bg: #1b3329; --success-fg: #6bc46d; --success-border: #2b5a3e;
     --failure-bg: #3a2426; --failure-fg: #e5707a; --failure-border: #62383c;
     --pending-bg: #3a3320; --pending-fg: #d9b850; --pending-border: #5e5230;
     --neutral-bg: #2d333b; --neutral-fg: #909dab; --neutral-border: #444c56;
+    --deploy-bg: #2d2438; --deploy-fg: #b083f0; --deploy-border: #4c3a66;
   }
 }
 body {
@@ -373,6 +418,7 @@ li.pr { margin: 1rem 0; }
   margin-right: var(--dot-gap); flex: none; background: var(--dot-active);
 }
 .status-dot.is-draft { background: var(--dot-draft); }
+.status-dot.is-deploy { background: var(--dot-deploy); }
 .draft { font-size: .75rem; background: transparent; color: var(--draft-text); border: 1px solid var(--border); border-radius: 1rem; padding: 0 .5rem; }
 .checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: calc(var(--dot-size) + var(--dot-gap)); }
 .pill {
@@ -383,6 +429,7 @@ li.pr { margin: 1rem 0; }
 .pill.failure, .pill.changes   { background: var(--failure-bg); color: var(--failure-fg); border-color: var(--failure-border); }
 .pill.pending, .pill.commented { background: var(--pending-bg); color: var(--pending-fg); border-color: var(--pending-border); }
 .pill.neutral, .pill.none      { background: var(--neutral-bg); color: var(--neutral-fg); border-color: var(--neutral-border); }
+.pill.deploying                { background: var(--deploy-bg); color: var(--deploy-fg); border-color: var(--deploy-border); }
 .branches { display: inline-flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
 .branch { display: inline-flex; align-items: center; gap: .2rem; }
 .branch-name {
@@ -454,14 +501,26 @@ def render_pill(label, info):
 
 def render_pr(pr, is_root=True):
     checks = bucket_checks(pr)
-    rstate, rlabel = review_state(pr)
+    deploy = is_deploy_pr(pr)
+    if deploy:
+        state_cls, state_label = merge_queue_state(pr)
+    else:
+        state_cls, state_label = review_state(pr)
 
     number = pr["number"]
     title = html.escape(pr["title"])
     url = html.escape(pr["url"], quote=True)
     is_draft = pr.get("isDraft")
-    dot_cls = "status-dot is-draft" if is_draft else "status-dot"
-    dot_title = ' title="Draft"' if is_draft else ""
+    # Deploy status takes precedence over draft for the dot color/tooltip.
+    if deploy:
+        dot_cls = "status-dot is-deploy"
+        dot_title = f' title="Deploy PR — {html.escape(state_label, quote=True)}"'
+    elif is_draft:
+        dot_cls = "status-dot is-draft"
+        dot_title = ' title="Draft"'
+    else:
+        dot_cls = "status-dot"
+        dot_title = ""
     status_dot = f'<span class="{dot_cls}"{dot_title}></span>'
     draft = '<span class="draft">draft</span>' if is_draft else ""
 
@@ -480,7 +539,7 @@ def render_pr(pr, is_root=True):
     else:
         branch_label = f'<span class="branches">{render_branch(head)}</span>'
 
-    approval = f'<span class="pill {rstate}">{html.escape(rlabel)}</span>'
+    status_pill = f'<span class="pill {state_cls}">{html.escape(state_label)}</span>'
     check_pills = "".join([
         render_pill("Main", checks["other"]),
         render_pill("E2E", checks["e2e"]),
@@ -500,7 +559,7 @@ def render_pr(pr, is_root=True):
         f'<span class="pr-title">{status_dot}<a href="{url}">#{number}</a> {title}</span>'
         f'{draft}{branch_label}'
         '</div>'
-        f'<div class="checks">{check_pills}{approval}</div>'
+        f'<div class="checks">{check_pills}{status_pill}</div>'
         f'{children_html}'
         '</li>'
     )
