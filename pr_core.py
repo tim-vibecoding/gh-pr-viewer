@@ -61,7 +61,7 @@ fragment prFields on PullRequest {
   mergeQueueEntry { state position }
   reviewDecision
   latestReviews(last: 20) {
-    nodes { author { login } state submittedAt }
+    nodes { author { __typename login } state submittedAt }
   }
   reviewRequests(last: 20) {
     nodes { requestedReviewer { ... on User { login } } }
@@ -227,17 +227,41 @@ def bucket_checks(pr):
 # Review state
 # ---------------------------------------------------------------------------
 
+def is_bot(author):
+    """True for GitHub app accounts.
+
+    GraphQL types the review author as a union; bots come back with
+    `__typename == "Bot"`. The `login` itself usually has no `[bot]` suffix
+    (e.g. `github-actions`), so we key off the type, falling back to the
+    substring check for any caller that only has a login.
+    """
+    author = author or {}
+    return author.get("__typename") == "Bot" or "[bot]" in (author.get("login") or "")
+
+
 def review_state(pr):
-    """Return (state_class, label) describing the PR's review status."""
+    """Return (state_class, label) describing the PR's review status.
+
+    Bot reviews are excluded — they get their own indicators (see
+    `bot_reviews`) and must not affect the human approval status.
+    """
     decision = pr.get("reviewDecision")
-    reviews = (pr.get("latestReviews") or {}).get("nodes") or []
+    reviews = [
+        r for r in ((pr.get("latestReviews") or {}).get("nodes") or [])
+        if not is_bot(r.get("author"))
+    ]
+    # `reviewDecision` is GitHub's aggregate; guard the APPROVED/CHANGES
+    # branches so they only fire when a human review backs them, keeping the
+    # decision human-only without re-deriving CODEOWNERS rules.
     if decision == "APPROVED":
         approvals = sum(1 for r in reviews if (r.get("state") or "") == "APPROVED")
-        if approvals > 1:
-            return "approved", f"Approved {approvals}x"
-        return "approved", "Approved"
+        if approvals:
+            if approvals > 1:
+                return "approved", f"Approved {approvals}x"
+            return "approved", "Approved"
     if decision == "CHANGES_REQUESTED":
-        return "changes", "Changes requested"
+        if any((r.get("state") or "") == "CHANGES_REQUESTED" for r in reviews):
+            return "changes", "Changes requested"
 
     commenters = {
         (r.get("author") or {}).get("login")
@@ -430,6 +454,7 @@ li.pr { margin: 1rem 0; }
 .pill.pending, .pill.commented { background: var(--pending-bg); color: var(--pending-fg); border-color: var(--pending-border); }
 .pill.neutral, .pill.none      { background: var(--neutral-bg); color: var(--neutral-fg); border-color: var(--neutral-border); }
 .pill.deploying                { background: var(--deploy-bg); color: var(--deploy-fg); border-color: var(--deploy-border); }
+.pill.bot { padding-left: .4rem; padding-right: .4rem; }
 .branches { display: inline-flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
 .branch { display: inline-flex; align-items: center; gap: .2rem; }
 .branch-name {
@@ -454,6 +479,38 @@ CHECK_GLYPH = {
     "neutral": "–",
     "none": "–",
 }
+
+BOT_GLYPH = "🤖"
+SPEECH_GLYPH = "💬"
+
+
+def bot_reviews(pr):
+    """Return [(state_class, glyph, login), ...] — one per bot, latest review."""
+    latest = {}  # login -> review node (most recent by submittedAt)
+    for r in (pr.get("latestReviews") or {}).get("nodes") or []:
+        login = (r.get("author") or {}).get("login")
+        if not is_bot(r.get("author")):
+            continue
+        if login not in latest or (r.get("submittedAt") or "") > (latest[login].get("submittedAt") or ""):
+            latest[login] = r
+    out = []
+    for login, r in latest.items():
+        state = r.get("state") or ""
+        if state == "APPROVED":
+            out.append(("approved", CHECK_GLYPH["success"], login))
+        elif state == "CHANGES_REQUESTED":
+            out.append(("changes", CHECK_GLYPH["failure"], login))
+        elif state == "COMMENTED":
+            out.append(("commented", SPEECH_GLYPH, login))
+    return out
+
+
+def render_bot_pill(state_cls, glyph, login):
+    title = html.escape(f"{login} {state_cls}", quote=True)
+    return (
+        f'<span class="pill bot {state_cls}" title="{title}">'
+        f'{BOT_GLYPH} {glyph}</span>'
+    )
 
 
 COPY_SCRIPT = """
@@ -540,6 +597,7 @@ def render_pr(pr, is_root=True):
         branch_label = f'<span class="branches">{render_branch(head)}</span>'
 
     status_pill = f'<span class="pill {state_cls}">{html.escape(state_label)}</span>'
+    bot_pills = "".join(render_bot_pill(*b) for b in bot_reviews(pr))
     check_pills = "".join([
         render_pill("Main", checks["other"]),
         render_pill("E2E", checks["e2e"]),
@@ -559,7 +617,7 @@ def render_pr(pr, is_root=True):
         f'<span class="pr-title">{status_dot}<a href="{url}">#{number}</a> {title}</span>'
         f'{draft}{branch_label}'
         '</div>'
-        f'<div class="checks">{check_pills}{status_pill}</div>'
+        f'<div class="checks">{check_pills}{status_pill}{bot_pills}</div>'
         f'{children_html}'
         '</li>'
     )
