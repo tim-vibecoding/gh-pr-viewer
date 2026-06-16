@@ -60,7 +60,7 @@ fragment prFields on PullRequest {
   mergeStateStatus
   mergeQueueEntry { state position }
   reviewDecision
-  latestReviews(last: 20) {
+  reviews(last: 100) {
     nodes { author { __typename login } state submittedAt }
   }
   reviewRequests(last: 20) {
@@ -239,6 +239,37 @@ def is_bot(author):
     return author.get("__typename") == "Bot" or "[bot]" in (author.get("login") or "")
 
 
+def effective_review_states(pr):
+    """Map reviewer login -> (author, effective_state) from full history.
+
+    `latestReviews` collapsed each author to their most recent review of any
+    kind, so leaving a follow-up comment after approving looked like a plain
+    "Commented". But GitHub treats a COMMENTED review as not overriding a prior
+    APPROVED/CHANGES_REQUESTED verdict (that's why `reviewDecision` stays
+    APPROVED). We mirror that here: walking reviews oldest-first, a COMMENTED
+    review only sets the state when nothing stronger came before; APPROVED /
+    CHANGES_REQUESTED / DISMISSED always replace it.
+    """
+    nodes = sorted(
+        (pr.get("reviews") or {}).get("nodes") or [],
+        key=lambda r: r.get("submittedAt") or "",
+    )
+    states = {}  # login -> [author, effective_state]
+    for r in nodes:
+        author = r.get("author") or {}
+        login = author.get("login")
+        if login is None:
+            continue
+        state = (r.get("state") or "").upper()
+        entry = states.setdefault(login, [author, None])
+        if state == "COMMENTED":
+            if entry[1] is None:
+                entry[1] = "COMMENTED"
+        elif state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            entry[1] = state
+    return {login: tuple(entry) for login, entry in states.items()}
+
+
 def review_state(pr):
     """Return (state_class, label) describing the PR's review status.
 
@@ -246,27 +277,26 @@ def review_state(pr):
     `bot_reviews`) and must not affect the human approval status.
     """
     decision = pr.get("reviewDecision")
-    reviews = [
-        r for r in ((pr.get("latestReviews") or {}).get("nodes") or [])
-        if not is_bot(r.get("author"))
-    ]
+    human = {
+        login: state
+        for login, (author, state) in effective_review_states(pr).items()
+        if not is_bot(author)
+    }
     # `reviewDecision` is GitHub's aggregate; guard the APPROVED/CHANGES
     # branches so they only fire when a human review backs them, keeping the
     # decision human-only without re-deriving CODEOWNERS rules.
     if decision == "APPROVED":
-        approvals = sum(1 for r in reviews if (r.get("state") or "") == "APPROVED")
+        approvals = sum(1 for state in human.values() if state == "APPROVED")
         if approvals:
             if approvals > 1:
                 return "approved", f"Approved {approvals}x"
             return "approved", "Approved"
     if decision == "CHANGES_REQUESTED":
-        if any((r.get("state") or "") == "CHANGES_REQUESTED" for r in reviews):
+        if any(state == "CHANGES_REQUESTED" for state in human.values()):
             return "changes", "Changes requested"
 
     commenters = {
-        (r.get("author") or {}).get("login")
-        for r in reviews
-        if (r.get("state") or "") == "COMMENTED"
+        login for login, state in human.items() if state == "COMMENTED"
     }
     commenters.discard(None)
 
@@ -485,17 +515,11 @@ SPEECH_GLYPH = "💬"
 
 
 def bot_reviews(pr):
-    """Return [(state_class, glyph, login), ...] — one per bot, latest review."""
-    latest = {}  # login -> review node (most recent by submittedAt)
-    for r in (pr.get("latestReviews") or {}).get("nodes") or []:
-        login = (r.get("author") or {}).get("login")
-        if not is_bot(r.get("author")):
-            continue
-        if login not in latest or (r.get("submittedAt") or "") > (latest[login].get("submittedAt") or ""):
-            latest[login] = r
+    """Return [(state_class, glyph, login), ...] — one per bot, effective state."""
     out = []
-    for login, r in latest.items():
-        state = r.get("state") or ""
+    for login, (author, state) in effective_review_states(pr).items():
+        if not is_bot(author):
+            continue
         if state == "APPROVED":
             out.append(("approved", CHECK_GLYPH["success"], login))
         elif state == "CHANGES_REQUESTED":
