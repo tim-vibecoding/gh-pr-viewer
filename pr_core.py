@@ -53,6 +53,7 @@ fragment prFields on PullRequest {
   title
   url
   isDraft
+  author { login }
   baseRefName
   headRefName
   repository { nameWithOwner defaultBranchRef { name } }
@@ -274,13 +275,16 @@ def review_state(pr):
     """Return (state_class, label) describing the PR's review status.
 
     Bot reviews are excluded — they get their own indicators (see
-    `bot_reviews`) and must not affect the human approval status.
+    `bot_reviews`) and must not affect the human approval status. Self-reviews
+    (the PR author reviewing their own PR) are also excluded, since they
+    shouldn't move the approval status.
     """
     decision = pr.get("reviewDecision")
+    pr_author = (pr.get("author") or {}).get("login")
     human = {
         login: state
         for login, (author, state) in effective_review_states(pr).items()
-        if not is_bot(author)
+        if not is_bot(author) and login != pr_author
     }
     # `reviewDecision` is GitHub's aggregate; guard the APPROVED/CHANGES
     # branches so they only fire when a human review backs them, keeping the
