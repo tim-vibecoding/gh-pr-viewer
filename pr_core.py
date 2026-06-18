@@ -176,11 +176,13 @@ def _normalize_check_state(node):
     if status != "COMPLETED":
         # QUEUED / IN_PROGRESS / PENDING / WAITING / REQUESTED
         return "pending"
-    if conclusion in ("FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "CANCELLED"):
+    if conclusion in ("FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"):
         return "failure"
     if conclusion in ("SUCCESS",):
         return "success"
-    if conclusion in ("SKIPPED", "STALE"):
+    # CANCELLED runs show as neutral in GitHub's UI (common for agentic
+    # workflow jobs that cancel by design), so don't count them as failures.
+    if conclusion in ("SKIPPED", "STALE", "CANCELLED"):
         return "skipped"
     # NEUTRAL or anything else
     return "neutral"
