@@ -15,6 +15,7 @@ from collections import defaultdict
 
 REQUIRE_REVIEW_CHECKS = ("Require Review or Audit Label", "Review Required")
 E2E_SUBSTRINGS = ("E2E Tests", "E2E Setup")
+PR_REVIEWER_PREFIX = "PR Reviewer"
 
 
 class PRViewerError(Exception):
@@ -72,7 +73,10 @@ fragment prFields on PullRequest {
     contexts(last: 100) {
       nodes {
         __typename
-        ... on CheckRun { name conclusion status detailsUrl startedAt completedAt }
+        ... on CheckRun {
+          name conclusion status detailsUrl startedAt completedAt
+          checkSuite { workflowRun { workflow { name } } }
+        }
         ... on StatusContext { context state targetUrl createdAt }
       }
     }
@@ -158,6 +162,23 @@ def _bucket_for(name):
     return "other"
 
 
+def _check_workflow(node):
+    """Name of the GitHub Actions workflow a CheckRun belongs to, or "".
+
+    The reviewer runs as jobs (`activation`, `agent`, …) under a workflow named
+    "PR Reviewer"; the job names carry no hint, so we key off the workflow.
+    StatusContext nodes (and any CheckRun without a workflow run) return "".
+    """
+    suite = node.get("checkSuite") or {}
+    run = suite.get("workflowRun") or {}
+    workflow = run.get("workflow") or {}
+    return workflow.get("name") or ""
+
+
+def _is_reviewer_check(node):
+    return _check_workflow(node).startswith(PR_REVIEWER_PREFIX)
+
+
 def _normalize_check_state(node):
     """Map a check/context node to one of: failure, pending, success, neutral."""
     if node.get("__typename") == "StatusContext":
@@ -201,6 +222,9 @@ def bucket_checks(pr):
             # The require-review check is informational noise; drop it entirely.
             if name in REQUIRE_REVIEW_CHECKS:
                 continue
+            # Reviewer checks drive the bot review pill, not the Main/E2E pills.
+            if _is_reviewer_check(node):
+                continue
             state = _normalize_check_state(node)
             # Skipped checks shouldn't count for or against a bucket.
             if state == "skipped":
@@ -224,6 +248,39 @@ def bucket_checks(pr):
             state = "neutral"
         result[bucket] = {"state": state, "passed": passed, "total": total}
     return result
+
+
+def reviewer_check_state(pr):
+    """Collapsed state of the 'PR Reviewer' checks, or None if there are none.
+
+    Returns one of: "pending", "errored", "success", "neutral".
+
+    `pending` is checked before `failure` so a still-running retry surfaces as
+    "working" rather than flashing an error from a superseded run. The check
+    `failure` state maps to the label "errored" deliberately, to stay lexically
+    distinct from the review `changes` state everywhere downstream: a failed
+    check means the reviewer didn't run, not that it requested changes.
+    """
+    rollup = pr.get("statusCheckRollup")
+    if not rollup:
+        return None
+    states = []
+    for node in _dedupe_contexts(rollup["contexts"]["nodes"]):
+        if not _is_reviewer_check(node):
+            continue
+        s = _normalize_check_state(node)
+        if s == "skipped":
+            continue
+        states.append(s)
+    if not states:
+        return None
+    if any(s == "pending" for s in states):
+        return "pending"
+    if any(s == "failure" for s in states):
+        return "errored"
+    if any(s == "success" for s in states):
+        return "success"
+    return "neutral"
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +484,7 @@ CSS = """
   --success-bg: #dafbe1; --success-fg: #1a7f37; --success-border: #b6e9c1;
   --failure-bg: #ffebe9; --failure-fg: #cf222e; --failure-border: #ffc1bc;
   --pending-bg: #fff8c5; --pending-fg: #9a6700; --pending-border: #f0e2a0;
+  --warning-bg: #fff1e5; --warning-fg: #bc4c00; --warning-border: #ffd8b5;
   --neutral-bg: #f0f2f4; --neutral-fg: #57606a; --neutral-border: #d8dde3;
   --deploy-bg: #f3e8ff; --deploy-fg: #8250df; --deploy-border: #e2c7ff;
 }
@@ -447,6 +505,7 @@ CSS = """
     --success-bg: #1b3329; --success-fg: #6bc46d; --success-border: #2b5a3e;
     --failure-bg: #3a2426; --failure-fg: #e5707a; --failure-border: #62383c;
     --pending-bg: #3a3320; --pending-fg: #d9b850; --pending-border: #5e5230;
+    --warning-bg: #40260f; --warning-fg: #e0843f; --warning-border: #6b4423;
     --neutral-bg: #2d333b; --neutral-fg: #909dab; --neutral-border: #444c56;
     --deploy-bg: #2d2438; --deploy-fg: #b083f0; --deploy-border: #4c3a66;
   }
@@ -488,6 +547,7 @@ li.pr { margin: 1rem 0; }
 .pill.success, .pill.approved  { background: var(--success-bg); color: var(--success-fg); border-color: var(--success-border); }
 .pill.failure, .pill.changes   { background: var(--failure-bg); color: var(--failure-fg); border-color: var(--failure-border); }
 .pill.pending, .pill.commented { background: var(--pending-bg); color: var(--pending-fg); border-color: var(--pending-border); }
+.pill.errored                  { background: var(--warning-bg); color: var(--warning-fg); border-color: var(--warning-border); }
 .pill.neutral, .pill.none      { background: var(--neutral-bg); color: var(--neutral-fg); border-color: var(--neutral-border); }
 .pill.deploying                { background: var(--deploy-bg); color: var(--deploy-fg); border-color: var(--deploy-border); }
 .pill.bot { padding-left: .4rem; padding-right: .4rem; }
@@ -539,6 +599,30 @@ def render_bot_pill(state_cls, glyph, login):
     title = html.escape(f"{login} {state_cls}", quote=True)
     return (
         f'<span class="pill bot {state_cls}" title="{title}">'
+        f'{BOT_GLYPH} {glyph}</span>'
+    )
+
+
+# Glyph/class/tooltip per reviewer-check state. `success` renders nothing: the
+# check finishing is not itself a verdict — the verdict arrives via the bot
+# *review* (`bot_reviews`), which carries its own pill, so a green pill here
+# would be redundant. `errored` uses ⚠ and a dedicated class so a broken
+# reviewer reads distinctly from the red ✗ `changes` review pill.
+REVIEWER_PILL = {
+    "pending": ("pending",  CHECK_GLYPH["pending"], "PR Reviewer running"),
+    "errored": ("errored",  "⚠",                    "PR Reviewer check failed"),
+    "success": None,
+    "neutral": ("neutral",  CHECK_GLYPH["neutral"], "PR Reviewer"),
+}
+
+
+def render_reviewer_pill(state):
+    spec = REVIEWER_PILL.get(state)
+    if spec is None:
+        return ""
+    cls, glyph, title = spec
+    return (
+        f'<span class="pill bot {cls}" title="{html.escape(title, quote=True)}">'
         f'{BOT_GLYPH} {glyph}</span>'
     )
 
@@ -627,7 +711,19 @@ def render_pr(pr, is_root=True):
         branch_label = f'<span class="branches">{render_branch(head)}</span>'
 
     status_pill = f'<span class="pill {state_cls}">{html.escape(state_label)}</span>'
-    bot_pills = "".join(render_bot_pill(*b) for b in bot_reviews(pr))
+    # The AI reviewer emits two signals for the same bot: its check and its
+    # review. Show only one pill. While the check is pending or errored, the
+    # review verdict is stale/superseded, so show just the check pill and hide
+    # the review pills. Once the check succeeds (or when there's no check), the
+    # review carries the verdict and its pill shows.
+    rc = reviewer_check_state(pr)
+    reviewer_pill = render_reviewer_pill(rc)
+    if rc in ("pending", "errored"):
+        bot_pills = reviewer_pill
+    else:
+        bot_pills = reviewer_pill + "".join(
+            render_bot_pill(*b) for b in bot_reviews(pr)
+        )
     check_pills = "".join([
         render_pill("Main", checks["other"]),
         render_pill("E2E", checks["e2e"]),
