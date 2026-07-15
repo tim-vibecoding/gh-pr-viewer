@@ -345,18 +345,25 @@ def review_state(pr):
         for login, (author, state) in effective_review_states(pr).items()
         if not is_bot(author) and login != pr_author
     }
+    approvals = sum(1 for state in human.values() if state == "APPROVED")
+    human_changes = any(state == "CHANGES_REQUESTED" for state in human.values())
+
     # `reviewDecision` is GitHub's aggregate; guard the APPROVED/CHANGES
     # branches so they only fire when a human review backs them, keeping the
     # decision human-only without re-deriving CODEOWNERS rules.
-    if decision == "APPROVED":
-        approvals = sum(1 for state in human.values() if state == "APPROVED")
-        if approvals:
-            if approvals > 1:
-                return "approved", f"Approved {approvals}x"
-            return "approved", "Approved"
-    if decision == "CHANGES_REQUESTED":
-        if any(state == "CHANGES_REQUESTED" for state in human.values()):
-            return "changes", "Changes requested"
+    if decision == "CHANGES_REQUESTED" and human_changes:
+        return "changes", "Changes requested"
+    # Show "Approved" when GitHub's aggregate says so, OR when every human has
+    # approved and the only thing keeping the aggregate off APPROVED is a review
+    # we deliberately exclude. A bot (or the author's own) CHANGES_REQUESTED
+    # counts toward `reviewDecision`, so it can drag the aggregate to
+    # CHANGES_REQUESTED even though no human is blocking — don't let that hide a
+    # real human approval. We stay conservative for REVIEW_REQUIRED (CODEOWNERS
+    # still needs someone), where a lone human approval isn't enough.
+    if approvals and not human_changes and decision in ("APPROVED", "CHANGES_REQUESTED"):
+        if approvals > 1:
+            return "approved", f"Approved {approvals}x"
+        return "approved", "Approved"
 
     commenters = {
         login for login, state in human.items() if state == "COMMENTED"

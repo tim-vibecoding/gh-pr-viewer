@@ -184,5 +184,58 @@ class RenderPrPillCombinationTest(unittest.TestCase):
         self.assertIn("pill bot approved", html)
 
 
+def _review(login, state, ts="2020-01-01T00:00:00Z", bot=False):
+    author = {"login": login}
+    if bot:
+        author["__typename"] = "Bot"
+    return {"author": author, "state": state, "submittedAt": ts}
+
+
+def _review_pr(reviews, decision, author="me", requested=()):
+    return {
+        "author": {"login": author},
+        "reviewDecision": decision,
+        "reviews": {"nodes": list(reviews)},
+        "reviewRequests": {"nodes": [
+            {"requestedReviewer": {"login": r}} for r in requested
+        ]},
+    }
+
+
+class ReviewStateTest(unittest.TestCase):
+    def test_human_approval_survives_bot_changes_requested(self):
+        # A bot CHANGES_REQUESTED drags GitHub's aggregate reviewDecision to
+        # CHANGES_REQUESTED, but a human approved and no human is blocking, so
+        # the PR should still read as approved (regression: PR 13615).
+        pr = _review_pr(
+            [
+                _review("github-actions", "CHANGES_REQUESTED", "2020-01-01T00:00:00Z", bot=True),
+                _review("me", "COMMENTED", "2020-01-01T00:01:00Z"),
+                _review("reviewer", "APPROVED", "2020-01-02T00:00:00Z"),
+            ],
+            decision="CHANGES_REQUESTED",
+        )
+        self.assertEqual(c.review_state(pr), ("approved", "Approved"))
+
+    def test_human_changes_requested_still_wins(self):
+        pr = _review_pr(
+            [_review("reviewer", "CHANGES_REQUESTED")],
+            decision="CHANGES_REQUESTED",
+        )
+        self.assertEqual(c.review_state(pr), ("changes", "Changes requested"))
+
+    def test_review_required_not_shown_as_approved(self):
+        # CODEOWNERS still needs someone: a lone human approval is not enough.
+        pr = _review_pr(
+            [_review("reviewer", "APPROVED")],
+            decision="REVIEW_REQUIRED",
+        )
+        self.assertEqual(c.review_state(pr), ("none", "No reviews"))
+
+    def test_plain_approval(self):
+        pr = _review_pr([_review("reviewer", "APPROVED")], decision="APPROVED")
+        self.assertEqual(c.review_state(pr), ("approved", "Approved"))
+
+
 if __name__ == "__main__":
     unittest.main()
