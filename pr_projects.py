@@ -235,6 +235,7 @@ FLASH = {
         "it as projects.json.corrupt-1 (or -2, -3…) — nothing was deleted."
     )),
     "gone":     (True,  lambda f: "That project no longer exists."),
+    "refetched": (False, lambda f: "Cache cleared — re-fetched from GitHub."),
     "unreadable": (True, lambda f: (
         "projects.json couldn't be read, so nothing was changed. The file has "
         "been left exactly as it is."
@@ -260,8 +261,27 @@ def render_flash(params, store):
 # Shared page furniture
 # ---------------------------------------------------------------------------
 
-def _nav(*extra):
-    return "".join(extra) + pr_core.HOME_NAV_LINKS
+def refresh_form(return_to=None):
+    """Clear the cache and re-render, landing back on the same page.
+
+    A POST, like every other mutation: a GET would let a link prefetch or a
+    crawler clear the cache. Server-only — the CLI writes a static file, so the
+    form would post nowhere.
+    """
+    return (
+        '<form class="nav-form" method="post" action="/cache/clear">'
+        + _hidden(return_to=return_to or "")
+        + '<button class="btn" type="submit" '
+        'title="Discard cached GitHub data and re-fetch now">'
+        "&#8635; Refresh</button></form>"
+    )
+
+
+def _nav(*extra, return_to=None):
+    # The refresh form goes first: `nav.nav a:not(:last-child)::after` paints
+    # the `|` separators, so anything after the outbound links would give the
+    # last one a trailing pipe.
+    return refresh_form(return_to) + "".join(extra) + pr_core.HOME_NAV_LINKS
 
 
 def _breadcrumbs(*crumbs):
@@ -280,7 +300,8 @@ def render_message_page(title, heading, body_html):
         title,
         _breadcrumbs(("Open PRs", HOME_PATH), ("Projects", INDEX_PATH), (heading, None))
         + f"<h1>{html.escape(heading)}</h1>",
-        _nav(f'<a class="internal" href="{INDEX_PATH}">Projects</a>'),
+        _nav(f'<a class="internal" href="{INDEX_PATH}">Projects</a>',
+             return_to=INDEX_PATH),
         body_html,
     )
 
@@ -407,7 +428,9 @@ def render_index(store, store_error, pr_by_ref, entries_known, uncategorized, pa
         f'<div class="head-actions">{_new_project_form(params)}</div></div>'
     )
     return pr_core.page_shell(
-        "Projects", heading, _nav(f'<a class="internal" href="{HOME_PATH}">Open PRs</a>'),
+        "Projects", heading,
+        _nav(f'<a class="internal" href="{HOME_PATH}">Open PRs</a>',
+             return_to=INDEX_PATH),
         "\n".join(p for p in parts if p),
     )
 
@@ -691,6 +714,8 @@ def render_detail(store, project, pr_by_ref, show_closed, params, fetch_error=No
         _nav(
             f'<a class="internal" href="{HOME_PATH}">Open PRs</a>',
             f'<a class="internal" href="{INDEX_PATH}">Projects</a>',
+            # Back to this project, with its `?closed=` state intact.
+            return_to=url(base, {"closed": _one(params, "closed")}),
         ),
         meta + "\n" + "\n".join(p for p in body if p),
     )
@@ -729,7 +754,10 @@ def render_delete_page(project):
         f'<a class="btn" href="{href(project_path(project["id"]))}">Cancel</a>'
         "</div></form>"
     )
-    return pr_core.page_shell(f"Delete {project['name']}?", heading, _nav(), body)
+    return pr_core.page_shell(
+        f"Delete {project['name']}?", heading,
+        _nav(return_to=project_path(project["id"]) + "/delete"), body,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -789,8 +817,12 @@ class HomeContext:
         self.params = params
         self.total_open = total_open
         self.uncategorized = uncategorized
-        # An unreadable store degrades to today's plain list: no chips, no
-        # controls, no filter — plus one honest line saying why.
+        # Two different questions. `server` is "is this a real server page?" —
+        # it decides whether a form can post anywhere at all. `interactive` is
+        # that *and* a usable store: an unreadable store degrades to today's
+        # plain list (no chips, no controls, no filter, plus one honest line
+        # saying why), but it shouldn't take cache control away with it.
+        self.server = interactive
         self.interactive = interactive and not store_error
         self.user = user
         self.projects = [] if store_error else pr_store.projects(store)
@@ -820,7 +852,12 @@ class HomeContext:
     # -- page furniture ------------------------------------------------------
 
     def nav_html(self):
-        return f'<a class="internal" href="{INDEX_PATH}">Projects</a>' if self.interactive else ""
+        parts = []
+        if self.interactive:
+            parts.append(f'<a class="internal" href="{INDEX_PATH}">Projects</a>')
+        if self.server:
+            parts.append(refresh_form(self.return_to()))
+        return "".join(parts)
 
     def banner_html(self):
         parts = []

@@ -19,6 +19,7 @@ import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs, urlencode, unquote
 
+import pr_cache
 import pr_core
 import pr_projects
 import pr_store
@@ -362,7 +363,17 @@ def post_recover(form):
                   redirect_url(None, fallback, flash="recovered"), None, fallback)
 
 
+def post_clear_cache(form):
+    """↻ Refresh: empty the cache and land back on the page you were on, which
+    re-fetches as it renders. No confirmation — nothing is lost that isn't one
+    GitHub call away."""
+    pr_cache.clear()                       # never raises; a failed unlink is a miss
+    return redirect_url(_field(form, "return_to"), pr_projects.HOME_PATH,
+                        flash="refetched")
+
+
 POST_ROUTES = {
+    "/cache/clear": post_clear_cache,
     "/project/recover": post_recover,
     "/project/create": post_create,
     "/project/edit": post_edit,
@@ -587,6 +598,11 @@ def serve(user, host="127.0.0.1", port=8765):
     httpd = HTTPServer((host, port), handler)
     print(f"Serving PRs for {user} at http://{host}:{port}/  (Ctrl-C to stop)")
     print(f"Projects are stored in {pr_store.store_path()}")
+    if pr_cache.enabled():
+        print(f"Caching GitHub data in {pr_cache.cache_dir()} "
+              f"for {pr_cache.ttl():g}s (↻ Refresh clears it)")
+    else:
+        print("Cache disabled; every request re-fetches from GitHub.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -601,7 +617,15 @@ def main():
     parser.add_argument("--user", default="@me")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the cache entirely for this run; every request hits GitHub.",
+    )
     args = parser.parse_args()
+    # Caching is an entry-point policy, not a library default: it's live where
+    # a person runs the app, and off for anything that imports pr_core.
+    pr_cache.set_enabled(not args.no_cache)
     serve(args.user, host=args.host, port=args.port)
 
 

@@ -1,8 +1,12 @@
 import json
+import os
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
+import pr_cache
 import pr_core as c
 
 
@@ -93,6 +97,106 @@ class FetchPrsByRefTest(unittest.TestCase):
         with mock.patch("subprocess.run") as run:
             self.assertEqual(c.fetch_prs_by_ref([]), {})
         run.assert_not_called()
+
+
+class CachedFetchTest(unittest.TestCase):
+    """The cache is off for every other test in the suite — these turn it on
+    explicitly, pointed at a temp directory."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self._prev = os.environ.get("PR_VIEWER_CACHE")
+        os.environ["PR_VIEWER_CACHE"] = str(Path(self._dir.name) / "cache")
+        pr_cache.set_enabled(True)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        pr_cache.set_enabled(False)
+        if self._prev is None:
+            os.environ.pop("PR_VIEWER_CACHE", None)
+        else:
+            os.environ["PR_VIEWER_CACHE"] = self._prev
+        self._dir.cleanup()
+
+    def test_a_second_fetch_prs_does_not_shell_out(self):
+        payload = {"data": {"viewer": {"login": "me",
+                                       "pullRequests": {"nodes": [_pr_node(1)]}}}}
+        with mock.patch("subprocess.run", return_value=_completed(payload)) as run:
+            first = c.fetch_prs("@me")
+            second = c.fetch_prs("@me")
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(first, second)
+
+    def test_an_error_is_not_cached(self):
+        err = subprocess.CalledProcessError(1, [], output="", stderr="Bad credentials")
+        with mock.patch("subprocess.run", side_effect=err) as run:
+            for _ in range(2):
+                with self.assertRaises(c.PRViewerError):
+                    c.fetch_prs("@me")
+        self.assertEqual(run.call_count, 2)
+
+    def test_two_users_do_not_share_an_entry(self):
+        def fake_run(cmd, **kwargs):
+            login = next((a.split("=", 1)[1] for a in cmd if a.startswith("login=")), "me")
+            key = "user" if any(a.startswith("login=") for a in cmd) else "viewer"
+            return _completed({"data": {key: {"login": login,
+                                              "pullRequests": {"nodes": []}}}})
+
+        with mock.patch("subprocess.run", side_effect=fake_run) as run:
+            self.assertEqual(c.fetch_prs("@me")[0], "me")
+            self.assertEqual(c.fetch_prs("someone")[0], "someone")
+        self.assertEqual(run.call_count, 2)
+
+    def test_a_warm_ref_is_dropped_from_the_query_and_still_returned(self):
+        payload = {"data": {"e0": {"pullRequest": _pr_node(1)}}}
+        with mock.patch("subprocess.run", return_value=_completed(payload)):
+            c.fetch_prs_by_ref([("o/r", 1)])
+
+        cold = {"data": {"e0": {"pullRequest": _pr_node(2)}}}
+        with mock.patch("subprocess.run", return_value=_completed(cold)) as run:
+            out = c.fetch_prs_by_ref([("o/r", 1), ("o/r2", 2)])
+        # Only the cold ref is named in the query…
+        cmd = run.call_args[0][0]
+        self.assertIn("n0=r2", cmd)
+        self.assertNotIn("n1=r2", cmd)
+        # …and both come back, with `_children` attached either way.
+        self.assertEqual(out[("o/r", 1)]["number"], 1)
+        self.assertEqual(out[("o/r2", 2)]["number"], 2)
+        self.assertEqual(out[("o/r", 1)]["_children"], [])
+
+    def test_all_refs_warm_makes_no_call_at_all(self):
+        payload = {"data": {"e0": {"pullRequest": _pr_node(1)}, "e1": None}}
+        with mock.patch("subprocess.run", return_value=_completed(payload)):
+            c.fetch_prs_by_ref([("o/r", 1), ("gone/repo", 2)])
+
+        # A page needing only cached refs survives `gh` being broken.
+        with mock.patch("subprocess.run", side_effect=AssertionError("shelled out")):
+            out = c.fetch_prs_by_ref([("o/r", 1), ("gone/repo", 2)])
+        self.assertEqual(out[("o/r", 1)]["number"], 1)
+        self.assertIsNone(out[("gone/repo", 2)])   # the miss was cached too
+
+    def test_a_hand_edited_entry_is_refetched_rather_than_crashing(self):
+        pr_cache.put("prs/@me", "not a (login, nodes) pair")
+        pr_cache.put("ref/o/r#1", "not a pr node")
+
+        prs = {"data": {"viewer": {"login": "me", "pullRequests": {"nodes": []}}}}
+        with mock.patch("subprocess.run", return_value=_completed(prs)):
+            self.assertEqual(c.fetch_prs("@me"), ("me", []))
+        ref = {"data": {"e0": {"pullRequest": _pr_node(1)}}}
+        with mock.patch("subprocess.run", return_value=_completed(ref)):
+            self.assertEqual(c.fetch_prs_by_ref([("o/r", 1)])[("o/r", 1)]["number"], 1)
+
+    def test_each_hit_gets_its_own_object_graph(self):
+        payload = {"data": {"e0": {"pullRequest": _pr_node(1)}}}
+        with mock.patch("subprocess.run", return_value=_completed(payload)):
+            c.fetch_prs_by_ref([("o/r", 1)])
+        with mock.patch("subprocess.run", side_effect=AssertionError("shelled out")):
+            first = c.fetch_prs_by_ref([("o/r", 1)])[("o/r", 1)]
+            second = c.fetch_prs_by_ref([("o/r", 1)])[("o/r", 1)]
+        # `build_forest` mutates nodes in place, so one render's tree must not
+        # be able to leak into the next.
+        first["_children"].append("leak")
+        self.assertEqual(second["_children"], [])
 
 
 class PrIsOpenTest(unittest.TestCase):

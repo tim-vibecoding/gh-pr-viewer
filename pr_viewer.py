@@ -17,6 +17,7 @@ import sys
 import tempfile
 import webbrowser
 
+import pr_cache
 import pr_core
 import pr_projects
 import pr_store
@@ -41,7 +42,15 @@ def main():
         action="store_true",
         help="Omit project chips (the output this produced before projects existed).",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the cache entirely for this run; always fetch from GitHub.",
+    )
     args = parser.parse_args()
+    # Caching is an entry-point policy, not a library default: it's live where
+    # a person runs the app, and off for anything that imports pr_core.
+    pr_cache.set_enabled(not args.no_cache)
 
     try:
         if args.no_projects:

@@ -13,6 +13,8 @@ import json
 import subprocess
 from collections import defaultdict
 
+import pr_cache
+
 REQUIRE_REVIEW_CHECKS = ("Require Review or Audit Label", "Review Required")
 E2E_SUBSTRINGS = ("E2E Tests", "E2E Setup")
 PR_REVIEWER_PREFIX = "PR Reviewer"
@@ -90,7 +92,22 @@ def fetch_prs(user):
     """Return (resolved_login, [pr_node, ...]) for the given user.
 
     user is either a login string or None (meaning the authenticated user).
+
+    Cached for `pr_cache.ttl()` seconds when the cache is enabled. Errors are
+    never cached, so a failure costs a real fetch again next time.
     """
+    key = "prs/" + ("@me" if user in (None, "@me") else user)
+    hit, value = pr_cache.get(key)
+    # The shape is checked, not assumed: a hand-edited entry must be a miss
+    # like any other unusable one, never a traceback on the page.
+    if hit and isinstance(value, list) and len(value) == 2:
+        return value[0], value[1]
+    login, nodes = _fetch_prs_uncached(user)
+    pr_cache.put(key, [login, nodes])
+    return login, nodes
+
+
+def _fetch_prs_uncached(user):
     if user is None or user == "@me":
         query = QUERY_VIEWER + PR_FRAGMENT
         cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
@@ -126,6 +143,10 @@ def fetch_prs(user):
 REF_CHUNK_SIZE = 100
 
 
+def _ref_key(ref):
+    return f"ref/{ref[0]}#{ref[1]}"
+
+
 def _run_gh(cmd):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -157,12 +178,34 @@ def fetch_prs_by_ref(refs):
     page. That's the opposite of `fetch_prs`, which raises on any `errors`
     payload: there, errors mean the list is wrong; here they routinely mean one
     repo was deleted.
+
+    Cached **per ref**, not per call: the projects index asks for every ref
+    across all projects and a detail page asks for one project's subset, so
+    per-call keying would leave those two sharing nothing. Only the refs that
+    missed are fetched — and an all-hits call makes no subprocess call at all,
+    so it also can't raise.
     """
     wanted = list(dict.fromkeys(refs))
     out = {ref: None for ref in wanted}
 
-    for start in range(0, len(wanted), REF_CHUNK_SIZE):
-        chunk = wanted[start:start + REF_CHUNK_SIZE]
+    misses = []
+    for ref in wanted:
+        hit, value = pr_cache.get(_ref_key(ref))
+        if value is None:
+            # `None` is a real cached value — an inaccessible PR — and `out`
+            # already holds it; only a genuine miss needs fetching.
+            if not hit:
+                misses.append(ref)
+        elif isinstance(value, dict):
+            # Same shape as a freshly fetched node: `_children` is derived, so
+            # it is never stored, and the renderers require it to be present.
+            value.setdefault("_children", [])
+            out[ref] = value
+        else:
+            misses.append(ref)          # hand-edited into nonsense; refetch
+
+    for start in range(0, len(misses), REF_CHUNK_SIZE):
+        chunk = misses[start:start + REF_CHUNK_SIZE]
 
         # Repo names come from user input, so they travel as GraphQL variables,
         # never concatenated into the query text. `-F` types the number as an
@@ -195,6 +238,11 @@ def fetch_prs_by_ref(refs):
         for i, ref in enumerate(chunk):
             repo_node = data.get(f"e{i}") or {}
             pr = repo_node.get("pullRequest")
+            # Misses are cached too, as `null`: one dead entry in a project
+            # shouldn't cost a round trip on every render for a minute. This
+            # happens before `_children` is attached, so no derived key can
+            # reach the disk.
+            pr_cache.put(_ref_key(ref), pr)
             if pr is not None:
                 pr.setdefault("_children", [])
                 out[ref] = pr
@@ -708,6 +756,12 @@ form.inline { display: inline; }
   background: var(--subtle-bg);
 }
 .nav a.internal:not(:last-child)::after { content: none; }
+
+/* The ↻ Refresh button reads as the same kind of control as the internal
+   links rather than as a row button. It sits before the outbound links, so
+   the `|` separator rule above still finds the real last link. */
+.nav form.nav-form { display: inline-flex; margin: 0; }
+.nav form.nav-form .btn { font-size: .9rem; padding: .05rem .5rem; background: var(--subtle-bg); }
 
 .breadcrumbs { font-size: .85rem; color: var(--muted); margin-bottom: .2rem; }
 .breadcrumbs a { color: var(--accent); text-decoration: none; }

@@ -183,6 +183,18 @@ class DegradationTest(unittest.TestCase):
         self.assertIn("Project data is unavailable", self.out)
         self.assertIn("isn&#x27;t valid JSON", self.out)
 
+    def test_refresh_survives_because_it_has_nothing_to_do_with_the_store(self):
+        self.assertIn('action="/cache/clear"', self.out)
+
+
+class RefreshOnHomeTest(unittest.TestCase):
+    def test_it_posts_back_to_the_view_you_are_looking_at(self):
+        out = render([make_pr(1)], store_with(),
+                     params={"filter": ["uncategorized"], "user": ["someone"]})
+        self.assertIn(
+            'name="return_to" value="/?filter=uncategorized&amp;user=someone"', out
+        )
+
 
 class CliModeTest(unittest.TestCase):
     def setUp(self):

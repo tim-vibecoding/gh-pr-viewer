@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import urlencode, urlparse, parse_qs
 
+import pr_cache
 import pr_core
 import pr_projects
 import pr_server
@@ -328,6 +329,44 @@ class RecoveryTest(HandlerTestCase):
                                                   {}, True, None, {}))
 
 
+class ClearCacheTest(HandlerTestCase):
+    """↻ Refresh. The one test class that enables the cache, pointed at a temp
+    directory."""
+
+    def setUp(self):
+        super().setUp()
+        self.cache_dir = Path(self._dir.name) / "cache"
+        self._prev_cache = os.environ.get("PR_VIEWER_CACHE")
+        os.environ["PR_VIEWER_CACHE"] = str(self.cache_dir)
+        pr_cache.set_enabled(True)
+        self.addCleanup(self._restore_cache)
+
+    def _restore_cache(self):
+        pr_cache.set_enabled(False)
+        if self._prev_cache is None:
+            os.environ.pop("PR_VIEWER_CACHE", None)
+        else:
+            os.environ["PR_VIEWER_CACHE"] = self._prev_cache
+
+    def test_it_empties_the_cache_and_lands_back_where_you_were(self):
+        pr_cache.put("prs/@me", ["me", []])
+        location = pr_server.post_clear_cache({"return_to": ["/projects/x?closed=show"]})
+        parsed = urlparse(location)
+        self.assertEqual(parsed.path, "/projects/x")
+        self.assertEqual(parse_qs(parsed.query)["closed"], ["show"])
+        self.assertEqual(self.flash_of(location), "refetched")
+        self.assertEqual(list(self.cache_dir.glob("*.json")), [])
+        self.assertEqual(pr_cache.get("prs/@me"), (False, None))
+
+    def test_no_return_to_falls_back_home(self):
+        location = pr_server.post_clear_cache({})
+        self.assertEqual(urlparse(location).path, pr_projects.HOME_PATH)
+        self.assertEqual(self.flash_of(location), "refetched")
+
+    def test_an_empty_cache_is_not_an_error(self):
+        self.assertEqual(self.flash_of(pr_server.post_clear_cache({})), "refetched")
+
+
 class LiveServerTest(HandlerTestCase):
     """A real HTTPServer on port 0, with both GitHub fetches patched."""
 
@@ -402,8 +441,27 @@ class LiveServerTest(HandlerTestCase):
         ):
             status, _l, _b = self.post("/project/delete", {"project_id": pid}, headers)
             self.assertEqual(status, 403, headers)
+            # A crawler or a crafted page must not be able to clear the cache
+            # either — it's a new route through the same gate.
+            self.assertEqual(self.post("/cache/clear", {}, headers)[0], 403, headers)
         # …and nothing was deleted.
         self.assertIsNotNone(self.project(pid))
+
+    def test_refresh_is_on_every_page_and_posts_back_to_it(self):
+        pid = self.make_project("Q3", entries=[("o/r", 1, "n")])
+        for path, return_to in [
+            ("/", "/"),
+            ("/projects", pr_projects.INDEX_PATH),
+            (f"/projects/{pid}", f"/projects/{pid}"),
+        ]:
+            _s, _l, body = self.request("GET", path)
+            self.assertIn('action="/cache/clear"', body, path)
+            self.assertIn(f'name="return_to" value="{return_to}"', body, path)
+
+        status, location, _b = self.post("/cache/clear", {"return_to": f"/projects/{pid}"})
+        self.assertEqual(status, 303)
+        self.assertEqual(urlparse(location).path, f"/projects/{pid}")
+        self.assertEqual(parse_qs(urlparse(location).query)["flash"], ["refetched"])
 
     def test_an_oversized_body_is_refused(self):
         status, _l, _b = self.request(

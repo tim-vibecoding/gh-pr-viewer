@@ -59,6 +59,9 @@ python3 pr_viewer.py --no-open
 
 # Leave off the project chips entirely:
 python3 pr_viewer.py --no-projects
+
+# Ignore the 60s cache and fetch fresh:
+python3 pr_viewer.py --no-cache
 ```
 
 The script prints the path to the generated HTML file, e.g.:
@@ -78,10 +81,15 @@ python3 pr_server.py
 
 # Pick a port / user:
 python3 pr_server.py --port 9000 --user octocat
+
+# Never cache; every request hits GitHub:
+python3 pr_server.py --no-cache
 ```
 
-Then open `http://127.0.0.1:8765/` in a browser. Each page load re-fetches from
-GitHub, so **refresh = update**. Append `?user=LOGIN` to the URL to view a
+Then open `http://127.0.0.1:8765/` in a browser. GitHub data is cached for 60
+seconds, so a browser refresh may show data up to a minute old; the **↻
+Refresh** button in the nav discards the cache and re-fetches now. Append
+`?user=LOGIN` to the URL to view a
 different user's PRs without restarting the server (e.g.
 `http://127.0.0.1:8765/?user=octocat`). The server binds to loopback
 (`127.0.0.1`) by default; pass `--host 0.0.0.0` only if you really want to
@@ -194,12 +202,19 @@ sorted by PR number for stable ordering.
 - Only **open** PRs are fetched for the PR list (no closed/merged). Projects
   are the exception: they fetch their own entries in any state.
 - Capped at the first **100** open PRs per user — there's no pagination yet.
-- No caching; every CLI run — and every server request — hits the GitHub API.
-  The **projects index issues two GitHub fetches** (one for every project's
+- Fetches are cached on disk for **60 seconds**, so data can be up to a minute
+  stale and nothing on the page says how old it is. **↻ Refresh** (server) or
+  `--no-cache` (either entry point) forces a fetch. The cache lives in
+  `.pr-cache/` next to the code (gitignored, entirely re-derivable); override
+  the location with `PR_VIEWER_CACHE` and the TTL with `PR_VIEWER_CACHE_TTL`.
+  Errors are never cached and stale entries are never served in their place, so
+  a GitHub outage still shows today's error page once the TTL lapses.
+- The **projects index issues two GitHub fetches** (one for every project's
   entries, one for your open PRs to count the uncategorized ones); both degrade
-  to a partial page rather than an error if they fail.
+  to a partial page rather than an error if they fail. Cached per PR, so the
+  index warms every project page behind it.
 - No live auto-refresh: the CLI is one-shot (re-run to update), and in server
-  mode a browser refresh re-fetches (no JS/websockets pushing updates).
+  mode a browser refresh re-renders (no JS/websockets pushing updates).
 - The **CLI renders project chips but no controls** — it writes a static file,
   so forms would post nowhere and filter links would 404. Use server mode to
   actually manage projects, or `--no-projects` to drop the chips too.
@@ -213,10 +228,13 @@ github-pr-viewer/
   pr_core.py              # shared engine: fetch, process, render HTML
   pr_projects.py          # projects index / detail pages + the home additions
   pr_store.py             # projects.json: load, save, project & entry CRUD
+  pr_cache.py             # the 60s on-disk fetch cache: get, put, clear
   projects.json           # your projects (gitignored; created on first use)
+  .pr-cache/              # cached GitHub data (gitignored; safe to delete)
   test_pr_core.py         # checks, review state, pill combinations
-  test_pr_fetch.py        # the batched by-reference GitHub fetch
+  test_pr_fetch.py        # the batched by-reference GitHub fetch + caching
   test_pr_store.py        # storage, ordering, atomic writes, corruption
+  test_pr_cache.py        # TTL, negative caching, corruption, clear
   test_pr_projects.py     # project page rendering
   test_pr_home.py         # chips, the uncategorized filter, degradation
   test_pr_server.py       # routing, POST/redirect/flash, cross-origin refusal
@@ -234,6 +252,8 @@ github-pr-viewer/
     PROMPT.md             # the prompt for projects
     UI.md                 # how the feature should operate
     PLAN.md               # how the code gets there
+  vibe-prompts/caching/
+    PLAN.md               # the plan for the fetch cache
 ```
 
 ## Tests

@@ -1,5 +1,6 @@
 projects.json
 projects.json.corrupt-*
 projects.json.tmp-*
+.pr-cache/
 pr_server.log
 __pycache__/
