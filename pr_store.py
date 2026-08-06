@@ -46,7 +46,7 @@ def _now():
 
 
 def empty_store():
-    return {"version": VERSION, "projects": []}
+    return {"version": VERSION, "ordered": True, "projects": []}
 
 
 def store_path():
@@ -100,6 +100,18 @@ def load():
         project.setdefault("description", "")
         project.setdefault("show_closed", False)
         project.setdefault("touched_at", "")
+
+    if not store.get("ordered"):
+        # The index used to sort by `touched_at`; now the list order *is* the
+        # order, same as entries within a project. Adopt the old sort once, so
+        # the first manually-ordered view is exactly the view you last saw,
+        # then never sort again. The flag persists on the next write; until
+        # then this is deterministic, so a read-only store looks stable too.
+        store["projects"].sort(
+            key=lambda p: (p.get("touched_at") or "", p.get("name") or ""),
+            reverse=True,
+        )
+        store["ordered"] = True
     return store, None
 
 
@@ -169,12 +181,10 @@ def move_aside():
 # ---------------------------------------------------------------------------
 
 def projects(store):
-    """Projects, most recently touched first."""
-    return sorted(
-        store["projects"],
-        key=lambda p: (p.get("touched_at") or "", p.get("name") or ""),
-        reverse=True,
-    )
+    """Projects in their stored order — which is the order you arranged them
+    in, exactly as `entries` is for the PRs inside a project. A copy, so a
+    caller iterating it can't be surprised by a concurrent move."""
+    return list(store["projects"])
 
 
 def get(store, project_id):
@@ -221,9 +231,8 @@ def create_project(store, name, description=""):
 
 
 def edit_project(store, project_id, name, description):
-    """Rename / re-describe. Deliberately does not bump `touched_at`:
-    editing the title of a project you aren't working on shouldn't move it up
-    the index."""
+    """Rename / re-describe. Deliberately does not bump `touched_at`: it
+    records when a project was last worked in, and retitling isn't work."""
     project = _require(store, project_id)
     name = (name or "").strip()
     if not name:
@@ -237,6 +246,25 @@ def delete_project(store, project_id):
     project = _require(store, project_id)
     store["projects"].remove(project)
     return project
+
+
+def move_project(store, project_id, direction):
+    """Move a project one slot up/down, or to the top. Returns True if
+    anything moved.
+
+    The index shows every project — no filter to reason about — so this is the
+    plain version of `move_entry`. Not a `_touch`: `touched_at` says when you
+    last worked in a project, and rearranging the index isn't that.
+    """
+    if direction not in ("up", "down", "top"):
+        raise StoreError(f"Unknown direction {direction!r}.")
+    ordered = store["projects"]
+    i = ordered.index(_require(store, project_id))
+    target = 0 if direction == "top" else i - 1 if direction == "up" else i + 1
+    if target == i or not 0 <= target < len(ordered):
+        return False                      # at the end of the list; arrow disabled
+    ordered.insert(target, ordered.pop(i))
+    return True
 
 
 def set_show_closed(store, project_id, show_closed):

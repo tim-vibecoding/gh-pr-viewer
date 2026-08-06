@@ -169,6 +169,28 @@ def post_delete(form):
     return _saved(store, redirect_url(None, fallback, flash="deleted"), None, fallback)
 
 
+def post_project_move(form):
+    """Reorder the index itself. The plain sibling of `post_entry_move`: every
+    project is visible here, so there's no filter state to reconcile."""
+    return_to, fallback = _field(form, "return_to"), pr_projects.INDEX_PATH
+    project_id = _field(form, "project_id")
+    store, refused = _loaded(return_to, fallback)
+    if refused:
+        return refused
+
+    anchor = pr_projects.project_anchor(project_id)
+    try:
+        moved = pr_store.move_project(store, project_id, _field(form, "direction"))
+    except pr_store.StoreError:
+        return redirect_url(return_to, fallback, flash="gone")
+    if not moved:
+        return redirect_url(return_to, fallback, anchor=anchor)
+    return _saved(store,
+                  redirect_url(return_to, fallback, anchor=anchor,
+                               flash="pmoved", project=[project_id]),
+                  return_to, fallback)
+
+
 def post_add_pr(form):
     """Add by reference: anyone's PR, any repo you can read, any state."""
     project_id = _field(form, "project_id")
@@ -380,6 +402,7 @@ POST_ROUTES = {
     "/project/create": post_create,
     "/project/edit": post_edit,
     "/project/delete": post_delete,
+    "/project/move": post_project_move,
     "/project/add-pr": post_add_pr,
     "/project/entry/note": post_entry_note,
     "/project/entry/move": post_entry_move,

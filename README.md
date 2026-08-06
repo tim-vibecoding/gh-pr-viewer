@@ -168,9 +168,10 @@ Three pages, all in server mode:
   the open PRs that aren't in any project, which is the view you work down
   when triaging. Both modes state the ratio, so a filtered view never lies by
   omission.
-- **Projects** (`/projects`) — every project, most recently touched first, with
-  its PR count split into open/closed and its description. **+ New project**
-  creates one inline.
+- **Projects** (`/projects`) — every project, with its PR count split into
+  open/closed and its description. The list is yours to arrange: the same
+  **▲ ▼ ⤒** controls that order PRs inside a project order the projects here.
+  **+ New project** creates one inline, at the bottom of the list.
 - **Project detail** (`/projects/<id>`) — the main page. Reorder with **▲ ▼**
   and **⤒** (move to top), edit notes in place, rename or describe the
   project, add a PR by pasting a GitHub URL or `owner/repo#123`, and

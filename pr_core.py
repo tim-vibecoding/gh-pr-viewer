@@ -836,8 +836,15 @@ details.note-edit .panel { max-width: 42rem; }
 
 /* Projects index */
 ul.projects { list-style: none; padding-left: 0; }
-li.project-row { border-bottom: 1px solid var(--border); }
+li.project-row {
+  display: flex; gap: .6rem; align-items: flex-start;
+  border-bottom: 1px solid var(--border);
+}
+/* The arrows sit in the same gutter as a project page's, so the two ordered
+   lists look and work alike; the padding lines them up with the link's text. */
+.project-controls { padding-top: .6rem; }
 li.project-row a.project-link {
+  flex: 1 1 auto; min-width: 0;
   display: block; padding: .7rem .2rem; text-decoration: none; color: inherit;
 }
 li.project-row a.project-link:hover { background: var(--subtle-bg); }

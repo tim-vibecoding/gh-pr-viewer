@@ -50,6 +50,37 @@ class LoadSaveTest(StoreTestCase):
         # we refuse to clobber: loading must not have touched the file.
         self.assertEqual(self.path.read_text(encoding="utf-8"), "{not json at all")
 
+    def _write(self, store):
+        self.path.write_text(json.dumps(store), encoding="utf-8")
+
+    def test_a_store_from_before_manual_ordering_adopts_the_old_sort_once(self):
+        # Written when the index sorted by touched_at, so the first ordered
+        # view must be the view that store last showed — newest first.
+        self._write({"version": s.VERSION, "projects": [
+            {"id": "1", "name": "old", "touched_at": "2020-01-01T00:00:00Z",
+             "entries": []},
+            {"id": "2", "name": "new", "touched_at": "2021-01-01T00:00:00Z",
+             "entries": []},
+        ]})
+        store, _ = s.load()
+        self.assertEqual([p["id"] for p in s.projects(store)], ["2", "1"])
+
+        # And once saved it is a manual order: touched_at can't reshuffle it.
+        s.move_project(store, "1", "top")
+        s.save(store)
+        reloaded, _ = s.load()
+        self.assertEqual([p["id"] for p in s.projects(reloaded)], ["1", "2"])
+
+    def test_an_ordered_store_is_never_re_sorted(self):
+        self._write({"version": s.VERSION, "ordered": True, "projects": [
+            {"id": "1", "name": "stale", "touched_at": "2020-01-01T00:00:00Z",
+             "entries": []},
+            {"id": "2", "name": "fresh", "touched_at": "2021-01-01T00:00:00Z",
+             "entries": []},
+        ]})
+        store, _ = s.load()
+        self.assertEqual([p["id"] for p in s.projects(store)], ["1", "2"])
+
     def test_newer_version_loads_read_only_with_a_message(self):
         self.path.write_text(
             json.dumps({"version": s.VERSION + 1, "projects": []}), encoding="utf-8"
@@ -111,12 +142,46 @@ class ProjectCrudTest(StoreTestCase):
         self.assertTrue(s.name_exists(self.store, "q3 migration"))
         self.assertFalse(s.name_exists(self.store, "q3 migration", exclude_id=p["id"]))
 
-    def test_index_order_is_most_recently_touched_first(self):
+    def _names(self):
+        return [p["name"] for p in s.projects(self.store)]
+
+    def test_index_order_is_the_stored_order_and_new_projects_go_last(self):
         a = s.create_project(self.store, "A")
         b = s.create_project(self.store, "B")
+        # touched_at no longer has a say: the order is the one you arranged.
         a["touched_at"] = "2020-01-01T00:00:00Z"
         b["touched_at"] = "2021-01-01T00:00:00Z"
-        self.assertEqual([p["name"] for p in s.projects(self.store)], ["B", "A"])
+        self.assertEqual(self._names(), ["A", "B"])
+
+    def test_move_project_up_down_and_top(self):
+        ids = {n: s.create_project(self.store, n)["id"] for n in ("A", "B", "C")}
+        self.assertTrue(s.move_project(self.store, ids["C"], "up"))
+        self.assertEqual(self._names(), ["A", "C", "B"])
+        self.assertTrue(s.move_project(self.store, ids["A"], "down"))
+        self.assertEqual(self._names(), ["C", "A", "B"])
+        self.assertTrue(s.move_project(self.store, ids["B"], "top"))
+        self.assertEqual(self._names(), ["B", "C", "A"])
+
+    def test_move_project_at_the_ends_is_a_no_op(self):
+        ids = {n: s.create_project(self.store, n)["id"] for n in ("A", "B")}
+        self.assertFalse(s.move_project(self.store, ids["A"], "up"))
+        self.assertFalse(s.move_project(self.store, ids["B"], "down"))
+        self.assertFalse(s.move_project(self.store, ids["A"], "top"))
+        self.assertEqual(self._names(), ["A", "B"])
+
+    def test_move_project_does_not_bump_touched_at(self):
+        a = s.create_project(self.store, "A")
+        s.create_project(self.store, "B")
+        a["touched_at"] = "2020-01-01T00:00:00Z"
+        s.move_project(self.store, a["id"], "down")
+        self.assertEqual(a["touched_at"], "2020-01-01T00:00:00Z")
+
+    def test_move_project_rejects_a_missing_project_or_bad_direction(self):
+        p = s.create_project(self.store, "A")
+        with self.assertRaises(s.StoreError):
+            s.move_project(self.store, "nope", "up")
+        with self.assertRaises(s.StoreError):
+            s.move_project(self.store, p["id"], "sideways")
 
 
 class EntryTest(StoreTestCase):

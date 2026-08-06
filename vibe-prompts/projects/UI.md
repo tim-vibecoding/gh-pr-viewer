@@ -169,9 +169,16 @@ Projects                                        [ + New project ]
   fourth page, and it's hidden when the count is zero.
 - Rename and delete live on the project page, not here. One place to manage a
   project, not two.
-- Ordering of this list: most recently touched first (added to, reordered, note
-  edited), since that tracks what you're actually working on. Not manually
-  ordered — that's a level of fiddling the prompt doesn't ask for.
+- Ordering of this list is manual, with the same **▲ ▼ ⤒** controls a project
+  page gives its PRs — same glyphs, same disabled ends, same land-on-the-row
+  reload. Two ordered lists that behave differently would be two things to
+  learn. The arrows are hidden when there's nothing to arrange (one project) or
+  when the store is read-only.
+- Was: most recently touched first. That tracked what you'd last poked, not what
+  you care about — a project you're steadily working through kept sinking under
+  one you touched once. `touched_at` still records the fact; it just no longer
+  decides the order. Existing stores adopt that sort as their starting order, so
+  nothing jumps on the first load after this change.
 
 ### 3. Project detail — the main page
 

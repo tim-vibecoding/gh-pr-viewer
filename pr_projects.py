@@ -44,6 +44,13 @@ def project_path(project_id):
     return f"/projects/{quote(project_id, safe='')}"
 
 
+def project_anchor(project_id):
+    """`project-9f3a1c22` — the id a move redirect targets, so the index lands
+    scrolled to the row you just moved. Sanitized: ids come from a file a human
+    can edit, and this one goes straight into a `Location` header."""
+    return "project-" + re.sub(r"[^A-Za-z0-9_-]", "-", project_id)
+
+
 def project_url(project_id, closed=None, anchor=None, **flash):
     return url(project_path(project_id), dict({"closed": closed}, **flash), anchor)
 
@@ -214,6 +221,9 @@ FLASH = {
     "removed":  (False, lambda f: f"#{f.pr()} removed from the project. Its note is gone."),
     "noted":    (False, lambda f: f"Note saved for #{f.pr()}."),
     "moved":    (False, lambda f: f"Moved #{f.pr()}."),
+    # Names the project by id, not by spelling it into the query: `name` is the
+    # new-project form's field, and a flash must never pre-fill it.
+    "pmoved":   (False, lambda f: f"Moved {f.project_links() or 'the project'}."),
     "created":  (False, lambda f: "Project created."),
     "edited":   (False, lambda f: "Project updated."),
     "deleted":  (False, lambda f: "Project deleted. The PRs themselves are untouched."),
@@ -383,6 +393,11 @@ def render_index(store, store_error, pr_by_ref, entries_known, uncategorized, pa
         parts.append(_recovery_form())
 
     projects = pr_store.projects(store)
+    # An unreadable or newer-version store renders read-only: a move would be
+    # refused by the server anyway, and an arrow that always flashes an error
+    # is worse than no arrow.
+    orderable = not store_error and len(projects) > 1
+    return_to = url(INDEX_PATH, {"user": _one(params, "user")})
     if not projects:
         parts.append(
             '<p class="empty">Projects are ordered lists of PRs with notes. '
@@ -390,7 +405,7 @@ def render_index(store, store_error, pr_by_ref, entries_known, uncategorized, pa
         )
     else:
         rows = []
-        for project in projects:
+        for position, project in enumerate(projects):
             n_open = n_closed = n_missing = 0
             for entry in project["entries"]:
                 pr = pr_by_ref.get((entry["repo"], entry["number"]))
@@ -407,9 +422,20 @@ def render_index(store, store_error, pr_by_ref, entries_known, uncategorized, pa
             blurb = ""
             if project.get("description"):
                 blurb = f'<div class="project-blurb">{html.escape(project["description"])}</div>'
+            controls = ""
+            if orderable:
+                controls = move_controls(
+                    "/project/move",
+                    dict(project_id=project["id"], return_to=return_to),
+                    f"“{project['name']}”",
+                    can_up=position > 0,
+                    can_down=position < len(projects) - 1,
+                    css_class=" project-controls",
+                )
             rows.append(
-                '<li class="project-row">'
-                f'<a class="project-link" href="{href(project_path(project["id"]))}">'
+                f'<li class="project-row" id="{project_anchor(project["id"])}">'
+                + controls
+                + f'<a class="project-link" href="{href(project_path(project["id"]))}">'
                 f'<span class="project-counts">{html.escape(counts)} ›</span>'
                 f'<span class="project-name">{html.escape(project["name"])}</span>'
                 f"{blurb}</a></li>"
@@ -463,12 +489,15 @@ def _stacked_hints(project, pr_by_ref):
     return hints
 
 
-def _move_controls(project, entry, anchor, return_to, can_up, can_down, closed):
+def move_controls(action, fields, what, can_up, can_down, css_class=""):
     """▲ ▼ ⤒ as one form with three named submit buttons. Real buttons with
     accessible labels, and a real `disabled` attribute at the ends — visibly
-    disabled, not silently inert."""
-    number = entry["number"]
+    disabled, not silently inert.
 
+    Shared by the PRs inside a project and the projects on the index: same
+    glyphs, same disabled ends, same one-click-one-slot promise, because they
+    are the same gesture on two lists.
+    """
     def button(direction, glyph, label, enabled):
         dis = "" if enabled else " disabled"
         return (
@@ -478,17 +507,26 @@ def _move_controls(project, entry, anchor, return_to, can_up, can_down, closed):
         )
 
     return (
-        '<div class="entry-controls">'
-        '<form method="post" action="/project/entry/move">'
+        f'<div class="entry-controls{css_class}">'
+        f'<form method="post" action="{action}">'
+        + _hidden(**fields)
+        + button("up", "▲", f"Move {what} up", can_up)
+        + button("down", "▼", f"Move {what} down", can_down)
+        + button("top", "⤒", f"Move {what} to the top", can_up)
+        + "</form></div>"
+    )
+
+
+def _entry_move_controls(project, entry, return_to, can_up, can_down, closed):
+    number = entry["number"]
+    return move_controls(
+        "/project/entry/move",
         # `closed` travels with the move so the server can rebuild the same
         # visible list the page showed — what the UI disables and what a move
         # does can't disagree.
-        + _hidden(project_id=project["id"], repo=entry["repo"], number=number,
-                  return_to=return_to, closed=closed)
-        + button("up", "▲", f"Move #{number} up", can_up)
-        + button("down", "▼", f"Move #{number} down", can_down)
-        + button("top", "⤒", f"Move #{number} to the top", can_up)
-        + "</form></div>"
+        dict(project_id=project["id"], repo=entry["repo"], number=number,
+             return_to=return_to, closed=closed),
+        f"#{number}", can_up, can_down,
     )
 
 
@@ -649,8 +687,8 @@ def render_detail(store, project, pr_by_ref, show_closed, params, fetch_error=No
             note_html, editor_html = _note_block(project, entry, anchor, return_to)
             items.append(
                 f'<li class="entry{closed_cls}" id="{anchor}">'
-                + _move_controls(project, entry, anchor, return_to, can_up,
-                                 can_down, closed_param)
+                + _entry_move_controls(project, entry, return_to, can_up,
+                                       can_down, closed_param)
                 + '<div class="entry-body">'
                 + row_html
                 + note_html

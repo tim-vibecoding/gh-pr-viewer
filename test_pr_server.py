@@ -123,6 +123,44 @@ class CreateTest(HandlerTestCase):
         self.assertEqual(len(self.store()["projects"]), 2)
 
 
+class ProjectMoveTest(HandlerTestCase):
+    def _names(self):
+        return [p["name"] for p in pr_store.projects(self.store())]
+
+    def test_move_reorders_the_index_and_anchors_to_the_row(self):
+        self.make_project("A")
+        b = self.make_project("B")
+        location = pr_server.post_project_move({
+            "project_id": [b], "direction": ["up"], "return_to": ["/projects"],
+        })
+        self.assertEqual(self.flash_of(location), "pmoved")
+        self.assertEqual(urlparse(location).fragment, f"project-{b}")
+        self.assertEqual(self._names(), ["B", "A"])
+
+    def test_a_move_at_the_end_is_a_quiet_no_op(self):
+        a = self.make_project("A")
+        self.make_project("B")
+        location = pr_server.post_project_move({
+            "project_id": [a], "direction": ["up"], "return_to": ["/projects"],
+        })
+        self.assertIsNone(self.flash_of(location))
+        self.assertEqual(self._names(), ["A", "B"])
+
+    def test_moving_a_deleted_project_says_gone_rather_than_crashing(self):
+        location = pr_server.post_project_move({"project_id": ["nope"],
+                                                "direction": ["up"]})
+        self.assertEqual(self.flash_of(location), "gone")
+
+    def test_the_return_to_keeps_the_user_filter(self):
+        self.make_project("A")
+        b = self.make_project("B")
+        location = pr_server.post_project_move({
+            "project_id": [b], "direction": ["top"],
+            "return_to": ["/projects?user=someone"],
+        })
+        self.assertEqual(parse_qs(urlparse(location).query)["user"], ["someone"])
+
+
 class EntryTest(HandlerTestCase):
     def test_add_pr_by_url(self):
         pid = self.make_project()

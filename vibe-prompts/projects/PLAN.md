@@ -86,11 +86,16 @@ silently loses your notes.
 
 - **`id`** — `secrets.token_hex(4)`. Names are not unique and are renameable, so
   URLs key off an opaque id.
-- **Order is list order.** `entries` *is* the ordering; there's no rank column to
-  drift out of sync with it.
-- **`touched_at`** — bumped on add, remove, reorder, and note edit. Drives the
-  index's "most recently touched first". Not bumped by rename/describe: editing
-  the title of a project you aren't working on shouldn't move it up the list.
+- **Order is list order.** `entries` *is* the ordering, and so is `projects` —
+  both lists are manually arranged, and there's no rank column to drift out of
+  sync with either.
+- **`touched_at`** — bumped on add, remove, reorder, and note edit. Records when
+  a project was last worked in. Not bumped by rename/describe, or by moving the
+  project up the index: neither is work on its contents.
+- **`ordered`** — set once a store's project order is the manual one. A store
+  written before manual ordering existed is sorted by `touched_at` on load (the
+  order it used to display) and flagged from then on, so the first arranged view
+  is the view you last saw and nothing re-sorts behind you afterwards.
 - **`show_closed`** — the remembered per-project filter state. Written whenever
   a request carries an explicit `?closed=`, so it records what you last chose.
 - **`version`** — a store whose version is greater than we understand renders
@@ -106,6 +111,7 @@ def projects(store) / get(store, project_id)
 def create_project(store, name, description) -> project
 def edit_project(store, project_id, name, description)
 def delete_project(store, project_id) -> project     # returns what was removed
+def move_project(store, project_id, direction) -> bool
 def add_entry(store, project_id, repo, number, note) -> "added" | "exists"
 def remove_entry(store, project_id, repo, number) -> entry
 def set_note(store, project_id, repo, number, note)
@@ -183,7 +189,8 @@ __pycache__/
 
 **Tests** (`test_pr_store.py`, stdlib `unittest` + `tempfile`): create/edit/
 delete; add is idempotent and never overwrites a note; move up/down/top
-including with hidden entries interleaved; `touched_at` ordering; a corrupt file
+including with hidden entries interleaved; projects move the same way and a
+pre-ordering store adopts its old `touched_at` sort exactly once; a corrupt file
 loads as an error and is not overwritten; an atomic write leaves no partial file.
 
 ---

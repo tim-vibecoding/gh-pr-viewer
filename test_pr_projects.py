@@ -313,6 +313,37 @@ class IndexTest(unittest.TestCase):
             self.assertNotIn("of your open PRs", p.render_index(
                 self._store(), None, {}, True, empty, {}))
 
+    def _two(self):
+        return self._store(dict(make_project(name="First"), id="p1"),
+                           dict(make_project(name="Second"), id="p2"))
+
+    def test_rows_carry_move_controls_disabled_at_the_ends(self):
+        out = p.render_index(self._two(), None, {}, True, 0, {})
+        self.assertIn('action="/project/move"', out)
+        self.assertIn('id="project-p1"', out)
+        self.assertIn('aria-label="Move “First” up" '
+                      'title="Move “First” up" disabled', out)
+        self.assertIn('aria-label="Move “Second” down" '
+                      'title="Move “Second” down" disabled', out)
+        # The middle of each pair is live: first can go down, second can go up.
+        self.assertIn('aria-label="Move “First” down" '
+                      'title="Move “First” down">', out)
+        self.assertIn('aria-label="Move “Second” to the top" '
+                      'title="Move “Second” to the top">', out)
+
+    def test_a_lone_project_has_nothing_to_reorder(self):
+        out = p.render_index(self._store(make_project()), None, {}, True, 0, {})
+        self.assertNotIn('action="/project/move"', out)
+
+    def test_a_read_only_store_shows_no_move_controls(self):
+        out = p.render_index(self._two(), "written by a newer version",
+                             {}, True, 0, {})
+        self.assertNotIn('action="/project/move"', out)
+
+    def test_move_controls_return_to_the_index_with_its_user_filter(self):
+        out = p.render_index(self._two(), None, {}, True, 0, {"user": ["someone"]})
+        self.assertIn('name="return_to" value="/projects?user=someone"', out)
+
     def test_store_error_is_shown_rather_than_swallowed(self):
         out = p.render_index(self._store(), "projects.json isn't valid JSON", {}, True, 0, {})
         self.assertIn("isn&#x27;t valid JSON", out)
