@@ -62,7 +62,7 @@ class HandlerTestCase(unittest.TestCase):
         self.fetch_by_ref = patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _fetch_by_ref(self, refs):
+    def _fetch_by_ref(self, refs, refresh=False):
         return {ref: self.prs.get(ref) for ref in refs}
 
     def _restore(self):
@@ -365,6 +365,70 @@ class ClearCacheTest(HandlerTestCase):
 
     def test_an_empty_cache_is_not_an_error(self):
         self.assertEqual(self.flash_of(pr_server.post_clear_cache({})), "refetched")
+
+
+class WarmTest(HandlerTestCase):
+    """The background warmer. Every pass is best effort: it can log a failure,
+    but it must never raise, and it must never stop the server."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(pr_core, "fetch_prs", return_value=("me", []))
+        self.fetch_prs = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_it_refreshes_the_user_query_and_every_stored_ref(self):
+        self.make_project("P", [("o/r", 1, ""), ("o/r2", 2, "")])
+        self.make_project("Q", [("o/r", 1, "")])          # same ref, both projects
+
+        refs, error = pr_server.warm_once("@me")
+
+        self.assertIsNone(error)
+        self.assertEqual(refs, 2)                          # deduped
+        self.fetch_prs.assert_called_once_with("@me", refresh=True)
+        # `refresh=True` is the whole point: without it a pass would be
+        # satisfied by the entries it is supposed to be replacing.
+        args, kwargs = self.fetch_by_ref.call_args
+        self.assertEqual(sorted(args[0]), [("o/r", 1), ("o/r2", 2)])
+        self.assertTrue(kwargs["refresh"])
+
+    def test_no_projects_means_no_ref_fetch(self):
+        refs, error = pr_server.warm_once("@me")
+        self.assertEqual((refs, error), (0, None))
+        self.fetch_by_ref.assert_not_called()
+
+    def test_a_failed_fetch_is_reported_not_raised(self):
+        self.make_project("P", [("o/r", 1, "")])
+        self.fetch_prs.side_effect = pr_core.PRViewerError("gh exploded")
+        self.fetch_by_ref.side_effect = pr_core.PRViewerError("gh exploded again")
+
+        refs, error = pr_server.warm_once("@me")
+
+        self.assertEqual(refs, 1)
+        self.assertIn("gh exploded", error)
+        # The ref pass still ran: one broken fetch doesn't skip the other.
+        self.fetch_by_ref.assert_called_once()
+
+    def test_an_unreadable_store_still_warms_the_user_query(self):
+        self.path.write_text("{ not json", encoding="utf-8")
+        refs, error = pr_server.warm_once("@me")
+        self.assertEqual((refs, error), (0, None))
+        self.fetch_prs.assert_called_once()
+
+    def test_the_loop_keeps_passing_until_it_is_stopped(self):
+        passes = threading.Semaphore(0)
+        with mock.patch.object(pr_server, "warm_once",
+                               side_effect=lambda user: passes.release() or (0, None)):
+            stop = pr_server.start_warmer("@me", interval=0.01)
+            self.addCleanup(stop.set)
+            for _ in range(2):
+                self.assertTrue(passes.acquire(timeout=5), "warmer stopped passing")
+            stop.set()
+            warmer = next((t for t in threading.enumerate()
+                           if t.name == "cache-warmer"), None)
+            if warmer is not None:
+                warmer.join(timeout=5)
+                self.assertFalse(warmer.is_alive())
 
 
 class LiveServerTest(HandlerTestCase):

@@ -84,11 +84,22 @@ python3 pr_server.py --port 9000 --user octocat
 
 # Never cache; every request hits GitHub:
 python3 pr_server.py --no-cache
+
+# Warm on a different period, or not at all:
+python3 pr_server.py --warm-interval 120
+python3 pr_server.py --warm-interval 0
 ```
 
 Then open `http://127.0.0.1:8765/` in a browser. GitHub data is cached for 60
 seconds, so a browser refresh may show data up to a minute old; the **↻
-Refresh** button in the nav discards the cache and re-fetches now. Append
+Refresh** button in the nav discards the cache and re-fetches now.
+
+The server also **warms the cache every 45 seconds** in the background — your
+open PRs plus every PR in every project — so pages are served from a warm cache
+rather than paying for a GitHub round trip on the load that finds it cold. The
+period is shorter than the 60s TTL on purpose: an entry is replaced just before
+it expires. Each pass logs one line. `--warm-interval 0` turns it off (pages
+then fill the cache as you browse), and `--no-cache` implies it. Append
 `?user=LOGIN` to the URL to view a
 different user's PRs without restarting the server (e.g.
 `http://127.0.0.1:8765/?user=octocat`). The server binds to loopback
@@ -209,6 +220,11 @@ sorted by PR number for stable ordering.
   the location with `PR_VIEWER_CACHE` and the TTL with `PR_VIEWER_CACHE_TTL`.
   Errors are never cached and stale entries are never served in their place, so
   a GitHub outage still shows today's error page once the TTL lapses.
+- The server's **warmer keeps fetching whether or not anyone is looking** — one
+  pass every 45 seconds for as long as it runs, so a server left open all day
+  is a steady trickle of GitHub API calls rather than none while idle. It also
+  means the data you see is at most one pass old rather than one TTL old.
+  `--warm-interval 0` (or `--no-cache`) stops it.
 - The **projects index issues two GitHub fetches** (one for every project's
   entries, one for your open PRs to count the uncategorized ones); both degrade
   to a partial page rather than an error if they fail. Cached per PR, so the

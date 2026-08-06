@@ -88,16 +88,20 @@ fragment prFields on PullRequest {
 """
 
 
-def fetch_prs(user):
+def fetch_prs(user, refresh=False):
     """Return (resolved_login, [pr_node, ...]) for the given user.
 
     user is either a login string or None (meaning the authenticated user).
 
     Cached for `pr_cache.ttl()` seconds when the cache is enabled. Errors are
     never cached, so a failure costs a real fetch again next time.
+
+    `refresh=True` skips the read but still writes: it re-stamps the entry from
+    GitHub rather than being satisfied by the copy that is about to expire.
+    That's the warmer's mode (see `pr_server.warm_once`), never a page's.
     """
     key = "prs/" + ("@me" if user in (None, "@me") else user)
-    hit, value = pr_cache.get(key)
+    hit, value = (False, None) if refresh else pr_cache.get(key)
     # The shape is checked, not assumed: a hand-edited entry must be a miss
     # like any other unusable one, never a traceback on the page.
     if hit and isinstance(value, list) and len(value) == 2:
@@ -167,7 +171,7 @@ def _run_gh(cmd):
     return json.loads(result.stdout)
 
 
-def fetch_prs_by_ref(refs):
+def fetch_prs_by_ref(refs, refresh=False):
     """refs: [(repo, number), ...] -> {(repo, number): pr_node_or_None}.
 
     Any PR, in any state, by anyone — which is what a project page needs and
@@ -184,13 +188,17 @@ def fetch_prs_by_ref(refs):
     per-call keying would leave those two sharing nothing. Only the refs that
     missed are fetched — and an all-hits call makes no subprocess call at all,
     so it also can't raise.
+
+    `refresh=True` treats every ref as a miss, so all of them are re-fetched and
+    re-stamped. That's the warmer's mode (see `pr_server.warm_once`); a page
+    always takes what the cache has.
     """
     wanted = list(dict.fromkeys(refs))
     out = {ref: None for ref in wanted}
 
     misses = []
     for ref in wanted:
-        hit, value = pr_cache.get(_ref_key(ref))
+        hit, value = (False, None) if refresh else pr_cache.get(_ref_key(ref))
         if value is None:
             # `None` is a real cached value — an inaccessible PR — and `out`
             # already holds it; only a genuine miss needs fetching.

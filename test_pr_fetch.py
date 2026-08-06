@@ -186,6 +186,43 @@ class CachedFetchTest(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=_completed(ref)):
             self.assertEqual(c.fetch_prs_by_ref([("o/r", 1)])[("o/r", 1)]["number"], 1)
 
+    def test_refresh_refetches_a_warm_entry_and_rewrites_it(self):
+        """The warmer's mode: a plain call would be satisfied by the entry
+        that's about to expire, and so would write nothing."""
+        first = {"data": {"viewer": {"login": "me",
+                                     "pullRequests": {"nodes": [_pr_node(1)]}}}}
+        with mock.patch("subprocess.run", return_value=_completed(first)):
+            c.fetch_prs("@me")
+
+        second = {"data": {"viewer": {"login": "me",
+                                      "pullRequests": {"nodes": [_pr_node(2)]}}}}
+        with mock.patch("subprocess.run", return_value=_completed(second)) as run:
+            _login, nodes = c.fetch_prs("@me", refresh=True)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual([n["number"] for n in nodes], [2])
+        # …and the newly fetched value is what a later page sees.
+        with mock.patch("subprocess.run", side_effect=AssertionError("shelled out")):
+            self.assertEqual([n["number"] for n in c.fetch_prs("@me")[1]], [2])
+
+    def test_refresh_refetches_every_ref_even_when_all_are_warm(self):
+        payload = {"data": {"e0": {"pullRequest": _pr_node(1)}, "e1": None}}
+        with mock.patch("subprocess.run", return_value=_completed(payload)):
+            c.fetch_prs_by_ref([("o/r", 1), ("gone/repo", 2)])
+
+        fresh = {"data": {"e0": {"pullRequest": _pr_node(1)},
+                          "e1": {"pullRequest": _pr_node(2)}}}
+        with mock.patch("subprocess.run", return_value=_completed(fresh)) as run:
+            out = c.fetch_prs_by_ref([("o/r", 1), ("gone/repo", 2)], refresh=True)
+        # Both refs are named in the query — nothing was dropped as a hit.
+        cmd = run.call_args[0][0]
+        self.assertIn("n0=r", cmd)
+        self.assertIn("n1=repo", cmd)
+        self.assertEqual(out[("gone/repo", 2)]["number"], 2)
+        # A ref that came back this time replaces the cached `null`.
+        with mock.patch("subprocess.run", side_effect=AssertionError("shelled out")):
+            again = c.fetch_prs_by_ref([("gone/repo", 2)])
+        self.assertEqual(again[("gone/repo", 2)]["number"], 2)
+
     def test_each_hit_gets_its_own_object_graph(self):
         payload = {"data": {"e0": {"pullRequest": _pr_node(1)}}}
         with mock.patch("subprocess.run", return_value=_completed(payload)):

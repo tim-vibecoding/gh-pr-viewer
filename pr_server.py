@@ -16,6 +16,8 @@ See vibe-prompts/server/PLAN.md and vibe-prompts/projects/PLAN.md.
 import argparse
 import html
 import re
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs, urlencode, unquote
 
@@ -593,20 +595,115 @@ def _make_handler(default_user):
     return Handler
 
 
-def serve(user, host="127.0.0.1", port=8765):
+# ---------------------------------------------------------------------------
+# Cache warming
+#
+# A background thread re-fetches everything the pages read, on a period shorter
+# than the TTL, so a page load finds a warm entry instead of paying for a
+# GitHub round trip. The cache stays the only mechanism — the warmer just keeps
+# writing to it — so nothing here can be the reason a page breaks: if a warm
+# pass fails, entries lapse and the next request fetches exactly as it does
+# today.
+# ---------------------------------------------------------------------------
+
+# Shorter than the 60s default TTL, so an entry is replaced before it expires
+# rather than after — a period at or above the TTL leaves a cold window that
+# lands on whoever loads a page next.
+WARM_INTERVAL_SECONDS = 45
+
+
+def warm_once(user):
+    """Refresh every cache entry a page could ask for. Returns (refs, error).
+
+    Two keyspaces, so two fetches: `prs/<user>` for home and the index, and one
+    `ref/...` entry per PR across every project. `refresh=True` on both — a
+    plain call would be satisfied by the entry that is about to expire and
+    write nothing.
+
+    Never raises: a warm pass is best effort by construction.
+    """
+    error = None
+    try:
+        pr_core.fetch_prs(user, refresh=True)
+    except Exception as e:                      # noqa: BLE001 — the loop goes on
+        error = str(e)
+
+    # Read under the lock — a POST's read-modify-write is running on the
+    # server's thread — but fetch outside it, so a slow GitHub call never
+    # blocks a mutation.
+    with pr_store.lock():
+        store, store_error = pr_store.load()
+    refs = [] if store_error else pr_store.all_refs(store)
+    if refs:
+        try:
+            pr_core.fetch_prs_by_ref(refs, refresh=True)
+        except Exception as e:                  # noqa: BLE001
+            error = error or str(e)
+    return len(refs), error
+
+
+def _warm_loop(user, interval, stop):
+    while True:
+        started = time.monotonic()
+        refs, error = warm_once(user)
+        elapsed = time.monotonic() - started
+        if error:
+            # One line, not a traceback: GitHub being briefly unreachable is
+            # not news, and the next pass is `interval` away.
+            print(f"warm: failed after {elapsed:.1f}s — {error}")
+        else:
+            print(f"warm: PRs for {user} + {refs} project ref(s) in {elapsed:.1f}s")
+        # Measured from the *start* of the pass, so the period is the interval
+        # rather than the interval plus however long GitHub took — a several-
+        # second pass would otherwise quietly push the real period past the
+        # TTL. A pass slower than the interval still gets a proportional
+        # breather instead of running back to back.
+        if stop.wait(max(interval / 10, interval - elapsed)):
+            return
+
+
+def start_warmer(user, interval=WARM_INTERVAL_SECONDS):
+    """Start warming in the background and return its stop `Event`.
+
+    Daemon thread: it holds nothing that needs unwinding, so Ctrl-C exits at
+    once instead of waiting out the current sleep.
+    """
+    stop = threading.Event()
+    threading.Thread(
+        target=_warm_loop, args=(user, interval, stop),
+        name="cache-warmer", daemon=True,
+    ).start()
+    return stop
+
+
+def serve(user, host="127.0.0.1", port=8765, warm_interval=WARM_INTERVAL_SECONDS):
     handler = _make_handler(user)
     httpd = HTTPServer((host, port), handler)
     print(f"Serving PRs for {user} at http://{host}:{port}/  (Ctrl-C to stop)")
     print(f"Projects are stored in {pr_store.store_path()}")
+    stop_warmer = None
     if pr_cache.enabled():
         print(f"Caching GitHub data in {pr_cache.cache_dir()} "
               f"for {pr_cache.ttl():g}s (↻ Refresh clears it)")
+        if warm_interval > 0:
+            print(f"Warming the cache every {warm_interval:g}s in the background.")
+            if warm_interval >= pr_cache.ttl():
+                # Not an error — you may well want it — but it means entries
+                # expire before they're replaced, which is the thing the
+                # warmer exists to prevent.
+                print(f"  note: that is not shorter than the {pr_cache.ttl():g}s "
+                      "TTL, so entries will still go cold between passes.")
+            stop_warmer = start_warmer(user, warm_interval)
     else:
+        # Nothing to warm: `pr_cache.put` is a no-op, so a warm pass would be
+        # pure GitHub traffic with nowhere to land.
         print("Cache disabled; every request re-fetches from GitHub.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
+        if stop_warmer is not None:
+            stop_warmer.set()
         httpd.server_close()
 
 
@@ -622,11 +719,23 @@ def main():
         action="store_true",
         help="Bypass the cache entirely for this run; every request hits GitHub.",
     )
+    parser.add_argument(
+        "--warm-interval",
+        type=float,
+        default=WARM_INTERVAL_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "How often to re-fetch everything into the cache in the background "
+            f"(default: {WARM_INTERVAL_SECONDS:g}). 0 warms nothing, so pages "
+            "fill the cache themselves as you browse."
+        ),
+    )
     args = parser.parse_args()
     # Caching is an entry-point policy, not a library default: it's live where
     # a person runs the app, and off for anything that imports pr_core.
     pr_cache.set_enabled(not args.no_cache)
-    serve(args.user, host=args.host, port=args.port)
+    serve(args.user, host=args.host, port=args.port,
+          warm_interval=max(0.0, args.warm_interval))
 
 
 if __name__ == "__main__":
