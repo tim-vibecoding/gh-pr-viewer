@@ -53,6 +53,7 @@ fragment prFields on PullRequest {
   number
   title
   url
+  state
   isDraft
   author { login }
   baseRefName
@@ -118,6 +119,93 @@ def fetch_prs(user):
     login = container.get("login", user or "?")
     nodes = container["pullRequests"]["nodes"]
     return login, nodes
+
+
+# GraphQL caps how many nodes one query may touch; 100 aliased lookups is well
+# inside it and keeps a big project to a single round trip.
+REF_CHUNK_SIZE = 100
+
+
+def _run_gh(cmd):
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except FileNotFoundError:
+        raise PRViewerError("`gh` CLI not found on PATH. Install it from https://cli.github.com/")
+    except subprocess.CalledProcessError as e:
+        # A partial-failure GraphQL response (some aliases null) still exits
+        # non-zero, but carries a usable body — so prefer the body when it
+        # parses as JSON with a `data` key.
+        if e.stdout:
+            try:
+                payload = json.loads(e.stdout)
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict) and payload.get("data"):
+                return payload
+        raise PRViewerError(f"gh api graphql failed:\n{(e.stderr or '').strip()}")
+    return json.loads(result.stdout)
+
+
+def fetch_prs_by_ref(refs):
+    """refs: [(repo, number), ...] -> {(repo, number): pr_node_or_None}.
+
+    Any PR, in any state, by anyone — which is what a project page needs and
+    what the open-PR query can't give it.
+
+    Raises PRViewerError only when a whole request fails. A single missing or
+    inaccessible PR comes back as None, so one bad entry can't take down a
+    page. That's the opposite of `fetch_prs`, which raises on any `errors`
+    payload: there, errors mean the list is wrong; here they routinely mean one
+    repo was deleted.
+    """
+    wanted = list(dict.fromkeys(refs))
+    out = {ref: None for ref in wanted}
+
+    for start in range(0, len(wanted), REF_CHUNK_SIZE):
+        chunk = wanted[start:start + REF_CHUNK_SIZE]
+
+        # Repo names come from user input, so they travel as GraphQL variables,
+        # never concatenated into the query text. `-F` types the number as an
+        # int; `-f` would send it as a string and fail `Int!`.
+        decls, selections, fields = [], [], []
+        for i, (repo, number) in enumerate(chunk):
+            owner, _, name = repo.partition("/")
+            decls.append(f"$o{i}:String!,$n{i}:String!,$p{i}:Int!")
+            selections.append(
+                f"  e{i}: repository(owner:$o{i}, name:$n{i}) "
+                f"{{ pullRequest(number:$p{i}) {{ ...prFields }} }}"
+            )
+            fields += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}", "-F", f"p{i}={number}"]
+
+        query = (
+            "query(" + ", ".join(decls) + ") {\n"
+            + "\n".join(selections)
+            + "\n}\n"
+            + PR_FRAGMENT
+        )
+        payload = _run_gh(["gh", "api", "graphql", "-f", f"query={query}"] + fields)
+
+        data = payload.get("data")
+        if not data:
+            msgs = "; ".join(
+                err.get("message", str(err)) for err in (payload.get("errors") or [])
+            )
+            raise PRViewerError(f"GraphQL errors: {msgs or 'no data returned'}")
+
+        for i, ref in enumerate(chunk):
+            repo_node = data.get(f"e{i}") or {}
+            pr = repo_node.get("pullRequest")
+            if pr is not None:
+                pr.setdefault("_children", [])
+                out[ref] = pr
+
+    return out
+
+
+def pr_is_open(pr):
+    """True for an open PR. Anything else — merged or closed-unmerged — is
+    "closed" as far as the project filter is concerned."""
+    return (pr or {}).get("state", "OPEN") == "OPEN"
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +633,7 @@ li.pr { margin: 1rem 0; }
 }
 .status-dot.is-draft { background: var(--dot-draft); }
 .status-dot.is-deploy { background: var(--dot-deploy); }
+.status-dot.is-gone { background: transparent; border: 2px solid var(--muted); box-sizing: border-box; }
 .draft { font-size: .75rem; background: transparent; color: var(--draft-text); border: 1px solid var(--border); border-radius: 1rem; padding: 0 .5rem; }
 .checks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .25rem; margin-left: calc(var(--dot-size) + var(--dot-gap)); }
 .pill {
@@ -573,6 +662,143 @@ li.pr { margin: 1rem 0; }
 .copy-btn:hover { background: var(--subtle-bg); }
 .copy-btn.copied { color: var(--success-fg); border-color: var(--success-border); }
 .empty { color: var(--muted); font-style: italic; }
+
+/* ----------------------------------------------------------------------
+   Projects. Everything below serves the projects feature; the rules above
+   are the original PR list, unchanged.
+   ---------------------------------------------------------------------- */
+
+.pill.merged { background: var(--deploy-bg); color: var(--deploy-fg); border-color: var(--deploy-border); }
+.pill.closed { background: var(--failure-bg); color: var(--failure-fg); border-color: var(--failure-border); }
+.pill.unavailable { background: var(--neutral-bg); color: var(--neutral-fg); border-color: var(--neutral-border); }
+
+/* Shared control look: real <button>s, <a>s and <summary>s that read alike. */
+.btn, summary.btn {
+  font-size: .8rem; line-height: 1.4; cursor: pointer;
+  background: transparent; border: 1px solid var(--border); border-radius: .4rem;
+  color: var(--accent); padding: .1rem .5rem; text-decoration: none;
+  display: inline-block; font-family: inherit;
+}
+.btn:hover, summary.btn:hover { background: var(--subtle-bg); }
+.btn[disabled] { color: var(--muted); opacity: .45; cursor: default; }
+.btn[disabled]:hover { background: transparent; }
+.btn.primary { color: var(--fg); background: var(--subtle-bg); }
+.btn.danger { color: var(--failure-fg); border-color: var(--failure-border); }
+summary.btn { list-style: none; }
+summary.btn::-webkit-details-marker { display: none; }
+summary.btn::marker { content: ""; }
+details.disclosure { display: inline-block; }
+details.disclosure > .panel {
+  border: 1px solid var(--border); border-radius: .5rem; padding: .6rem .7rem;
+  margin-top: .4rem; background: var(--subtle-bg);
+}
+input[type=text], textarea {
+  font-family: inherit; font-size: .85rem; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--border); border-radius: .4rem;
+  padding: .2rem .4rem;
+}
+textarea { width: 100%; box-sizing: border-box; }
+label { font-size: .85rem; }
+form.inline { display: inline; }
+
+.nav a.internal {
+  /* Distinct from the outbound github.com links, so it doesn't read as
+     leaving the app. */
+  border: 1px solid var(--border); border-radius: .4rem; padding: .05rem .5rem;
+  background: var(--subtle-bg);
+}
+.nav a.internal:not(:last-child)::after { content: none; }
+
+.breadcrumbs { font-size: .85rem; color: var(--muted); margin-bottom: .2rem; }
+.breadcrumbs a { color: var(--accent); text-decoration: none; }
+.breadcrumbs a:hover { text-decoration: underline; }
+.page-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem; }
+.page-head h1 { margin-bottom: 0; }
+.head-actions { display: flex; gap: .4rem; align-items: center; }
+
+.flash {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: .3rem; background: var(--subtle-bg);
+  padding: .4rem .7rem; margin: .75rem 0; font-size: .9rem;
+}
+.flash.bad { border-left-color: var(--failure-fg); }
+
+.count-line { color: var(--muted); font-size: .9rem; }
+.meta-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+  margin: .75rem 0; padding-bottom: .5rem; border-bottom: 1px solid var(--border);
+}
+.filter { display: inline-flex; gap: .3rem; align-items: center; font-size: .8rem; }
+.filter .label { color: var(--muted); }
+.filter a {
+  color: var(--accent); text-decoration: none;
+  border: 1px solid var(--border); border-radius: .4rem; padding: .05rem .5rem;
+}
+.filter a[aria-current] { background: var(--subtle-bg); color: var(--fg); font-weight: 600; }
+
+.project-desc { color: var(--muted); white-space: pre-wrap; margin: .3rem 0 0; }
+.placeholder { color: var(--muted); font-style: italic; text-decoration: none; border-bottom: 1px dotted var(--border); }
+.placeholder:hover { color: var(--accent); }
+
+/* Project detail rows: controls in a gutter, the shared PR row beside them. */
+ul.entries { list-style: none; padding-left: 0; }
+li.entry {
+  display: flex; gap: .6rem; align-items: flex-start;
+  padding: .75rem 0; border-bottom: 1px solid var(--border);
+}
+li.entry.is-closed .pr-title a, li.entry.is-closed .pr-row { opacity: .65; }
+.entry-controls { display: flex; flex-direction: column; gap: .15rem; flex: none; padding-top: .1rem; }
+.entry-controls .btn { padding: 0 .35rem; font-size: .8rem; }
+.entry-body { flex: 1 1 auto; min-width: 0; }
+.row-repo { font-size: .75rem; color: var(--muted); text-decoration: none; }
+.row-repo:hover { text-decoration: underline; }
+.hint { font-size: .8rem; color: var(--muted); }
+.hint a { color: var(--muted); }
+
+.note {
+  border-left: 3px solid var(--border); padding-left: .6rem; margin: .4rem 0 0;
+  color: var(--muted); white-space: pre-wrap; font-size: .9rem;
+}
+.note a { color: var(--accent); }
+/* When the editor is open the stored text is redundant — this is the swap the
+   spec describes, done with CSS rather than JS. */
+li.entry:has(details.note-edit[open]) > .entry-body > .note,
+li.entry:has(details.note-edit[open]) > .entry-body > .note-placeholder { display: none; }
+.note-placeholder { margin: .4rem 0 0; font-size: .9rem; }
+.entry-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; align-items: flex-start; }
+details.note-edit .panel { max-width: 42rem; }
+.form-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .4rem; }
+
+.add-form { margin: 1rem 0; }
+.add-form input[name=ref] { min-width: 20rem; }
+
+/* Projects index */
+ul.projects { list-style: none; padding-left: 0; }
+li.project-row { border-bottom: 1px solid var(--border); }
+li.project-row a.project-link {
+  display: block; padding: .7rem .2rem; text-decoration: none; color: inherit;
+}
+li.project-row a.project-link:hover { background: var(--subtle-bg); }
+.project-name { font-weight: 600; color: var(--accent); }
+.project-counts { color: var(--muted); font-size: .85rem; float: right; }
+.project-blurb {
+  color: var(--muted); font-size: .85rem; margin-top: .1rem;
+  /* One line: the browser knows the width, a Python slice doesn't. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.footer-link { margin-top: 1.5rem; font-size: .9rem; }
+
+/* Home additions */
+.chips { display: inline-flex; flex-wrap: wrap; gap: .3rem; }
+.chip {
+  font-size: .7rem; text-decoration: none; border-radius: 1rem;
+  padding: .05rem .5rem; background: var(--subtle-bg); color: var(--branch-fg);
+  border: 1px solid var(--border);
+}
+.chip:hover { color: var(--accent); }
+.row-extras { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .3rem; margin-left: calc(var(--dot-size) + var(--dot-gap)); }
+.project-picker { display: flex; flex-direction: column; gap: .25rem; min-width: 16rem; }
+.project-picker .already { color: var(--muted); font-size: .75rem; }
 """
 
 CHECK_GLYPH = {
@@ -677,7 +903,28 @@ def render_pill(label, info):
     )
 
 
-def render_pr(pr, is_root=True):
+STATE_PILL = {
+    "MERGED": ("merged", "merged"),
+    "CLOSED": ("closed", "closed"),
+}
+
+
+def render_pr_row(pr, is_root=True, show_repo=False, hint=None, aside=None):
+    """The shared PR presentation: dot, title, draft badge, branches-or-hint,
+    and the pill line. Home rows and project rows are both this, so a status
+    means the same thing on both pages.
+
+    show_repo — append `owner/repo`, for pages with no per-repo heading.
+    hint      — HTML *replacing* the branch label, e.g. `stacked on #4821`,
+                for the flat project list that can't draw the stack.
+    aside     — HTML appended *after* the branch label, for a promoted row on
+                home that keeps its root branch label and still says where its
+                parent went. Callers build and escape both.
+
+    Closed and merged PRs get a `merged`/`closed` pill and drop their check
+    pills: checks on a landed PR are noise.
+    """
+    open_pr = pr_is_open(pr)
     checks = bucket_checks(pr)
     deploy = is_deploy_pr(pr)
     if deploy:
@@ -690,7 +937,10 @@ def render_pr(pr, is_root=True):
     url = html.escape(pr["url"], quote=True)
     is_draft = pr.get("isDraft")
     # Deploy status takes precedence over draft for the dot color/tooltip.
-    if deploy:
+    if not open_pr:
+        dot_cls = "status-dot is-gone"
+        dot_title = f' title="{STATE_PILL.get(pr.get("state"), ("", "closed"))[1]}"'
+    elif deploy:
         dot_cls = "status-dot is-deploy"
         dot_title = f' title="Deploy PR — {html.escape(state_label, quote=True)}"'
     elif is_draft:
@@ -702,20 +952,35 @@ def render_pr(pr, is_root=True):
     status_dot = f'<span class="{dot_cls}"{dot_title}></span>'
     draft = '<span class="draft">draft</span>' if is_draft else ""
 
-    # Top-level PRs show `base ← head`; stacked children show only their own
-    # head, since their base is the parent's head shown one level up.
-    base = pr["baseRefName"]
-    head = pr["headRefName"]
-    if is_root:
-        branch_label = (
-            '<span class="branches">'
-            f'{render_branch(base)}'
-            '<span class="branch-arrow">←</span>'
-            f'{render_branch(head)}'
-            '</span>'
-        )
+    # A hint (`stacked on #4821`) stands in for the branch label: a flat list
+    # can't draw the stack, so it says it in words instead.
+    if hint is not None:
+        branch_label = hint
+    elif not open_pr:
+        # A landed PR's head branch is usually deleted; a copy button for it is
+        # noise, same reasoning as dropping its check pills.
+        branch_label = ""
     else:
-        branch_label = f'<span class="branches">{render_branch(head)}</span>'
+        # Top-level PRs show `base ← head`; stacked children show only their own
+        # head, since their base is the parent's head shown one level up.
+        base = pr["baseRefName"]
+        head = pr["headRefName"]
+        if is_root:
+            branch_label = (
+                '<span class="branches">'
+                f'{render_branch(base)}'
+                '<span class="branch-arrow">←</span>'
+                f'{render_branch(head)}'
+                '</span>'
+            )
+        else:
+            branch_label = f'<span class="branches">{render_branch(head)}</span>'
+
+    repo_label = ""
+    if show_repo:
+        repo = pr["repository"]["nameWithOwner"]
+        repo_url = html.escape(f"https://github.com/{repo}", quote=True)
+        repo_label = f'<a class="row-repo" href="{repo_url}">{html.escape(repo)}</a>'
 
     status_pill = f'<span class="pill {state_cls}">{html.escape(state_label)}</span>'
     # The AI reviewer emits two signals for the same bot: its check and its
@@ -736,46 +1001,92 @@ def render_pr(pr, is_root=True):
         render_pill("E2E", checks["e2e"]),
     ])
 
+    if not open_pr:
+        cls, label = STATE_PILL.get(pr.get("state"), ("closed", "closed"))
+        # A landed PR's checks are noise; its final state is the whole story.
+        pills = f'<span class="pill {cls}">{label}</span>{status_pill}{bot_pills}'
+    else:
+        pills = f"{check_pills}{status_pill}{bot_pills}"
+
+    return (
+        '<div class="pr-row">'
+        f'<span class="pr-title">{status_dot}<a href="{url}">#{number}</a> {title}</span>'
+        f'{draft}{branch_label}{aside or ""}{repo_label}'
+        '</div>'
+        f'<div class="checks">{pills}</div>'
+    )
+
+
+def render_pr(pr, is_root=True, ctx=None):
+    """Home's `<li>`: the shared row, plus any project chips / controls the
+    context supplies, plus nested children."""
+    extras = ctx.row_extras(pr) if ctx is not None else ""
+    aside = ctx.row_hint(pr) if ctx is not None else None
+
     children_html = ""
     if pr["_children"]:
         children_html = (
             '<ul class="tree">'
-            + "".join(render_pr(c, is_root=False) for c in pr["_children"])
+            + "".join(render_pr(c, is_root=False, ctx=ctx) for c in pr["_children"])
             + "</ul>"
         )
 
+    anchor = f' id="{row_anchor(pr["repository"]["nameWithOwner"], pr["number"])}"'
     return (
-        '<li class="pr">'
-        '<div class="pr-row">'
-        f'<span class="pr-title">{status_dot}<a href="{url}">#{number}</a> {title}</span>'
-        f'{draft}{branch_label}'
-        '</div>'
-        f'<div class="checks">{check_pills}{status_pill}{bot_pills}</div>'
-        f'{children_html}'
-        '</li>'
+        f'<li class="pr"{anchor}>'
+        + render_pr_row(pr, is_root=is_root, aside=aside)
+        + extras
+        + children_html
+        + '</li>'
     )
 
 
-def render_html(login, repo_groups):
-    parts = [
+def row_anchor(repo, number):
+    """`pr-khan-webapp-4821` — the id every redirect targets, so "lands
+    scrolled to that row" needs no scroll-restoration code at all."""
+    return "pr-" + repo.replace("/", "-") + f"-{number}"
+
+
+HOME_NAV_LINKS = (
+    '<a href="https://github.com/pulls?q=is%3Apr+author%3A%40me+archived%3Afalse+is%3Aclosed">Closed PRs</a>'
+    '<a href="https://github.com/pulls?q=is%3Apr+is%3Aopen+user-review-requested%3A%40me+archived%3Afalse+">Review queue</a>'
+    '<a href="https://github.com/pulls?q=is%3Apr+label%3Aaudit+-label%3Areviewed+-review%3Aapproved+user-review-requested%3A%40me+archived%3Afalse">Audit queue</a>'
+)
+
+
+def page_shell(title, heading_html, nav_html, body_html):
+    """`<head>`, CSS, heading, nav, body, copy script — for all three pages.
+
+    `title` is plain text and gets escaped; the rest is HTML the caller built.
+    """
+    return "\n".join([
         "<!DOCTYPE html>",
         '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>Open PRs for {html.escape(login)}</title>",
+        f"<title>{html.escape(title)}</title>",
         f"<style>{CSS}</style></head><body>",
-        f"<h1>Open PRs for {html.escape(login)}</h1>",
-        '<nav class="nav">'
-        '<a href="https://github.com/pulls?q=is%3Apr+author%3A%40me+archived%3Afalse+is%3Aclosed">Closed PRs</a>'
-        '<a href="https://github.com/pulls?q=is%3Apr+is%3Aopen+user-review-requested%3A%40me+archived%3Afalse+">Review queue</a>'
-        '<a href="https://github.com/pulls?q=is%3Apr+label%3Aaudit+-label%3Areviewed+-review%3Aapproved+user-review-requested%3A%40me+archived%3Afalse">Audit queue</a>'
-        '</nav>',
-    ]
+        heading_html,
+        f'<nav class="nav">{nav_html}</nav>' if nav_html else "",
+        body_html,
+        f"<script>{COPY_SCRIPT}</script>",
+        "</body></html>",
+    ])
+
+
+def render_html(login, repo_groups, ctx=None):
+    parts = []
+    if ctx is not None:
+        parts.append(ctx.banner_html())
+        parts.append(ctx.ratio_html())
 
     total_prs = sum(
         1 for _, roots in repo_groups for _ in _walk(roots)
     )
     if total_prs == 0:
-        parts.append('<p class="empty">No open pull requests found.</p>')
+        parts.append(
+            ctx.empty_html() if ctx is not None
+            else '<p class="empty">No open pull requests found.</p>'
+        )
     else:
         for repo, roots in repo_groups:
             repo_url = html.escape(f"https://github.com/{repo}", quote=True)
@@ -783,12 +1094,20 @@ def render_html(login, repo_groups):
                 f'<h2><a class="repo-link" href="{repo_url}">{html.escape(repo)}</a></h2>'
             )
             parts.append('<ul class="tree">')
-            parts.extend(render_pr(r) for r in roots)
+            parts.extend(render_pr(r, ctx=ctx) for r in roots)
             parts.append("</ul>")
 
-    parts.append(f"<script>{COPY_SCRIPT}</script>")
-    parts.append("</body></html>")
-    return "\n".join(parts)
+    # The filter sits on the title line, where the mockup puts it.
+    heading = (
+        '<div class="page-head">'
+        f"<h1>Open PRs for {html.escape(login)}</h1>"
+        + (ctx.filter_html() if ctx is not None else "")
+        + "</div>"
+    )
+    nav = (ctx.nav_html() if ctx is not None else "") + HOME_NAV_LINKS
+    return page_shell(
+        f"Open PRs for {login}", heading, nav, "\n".join(p for p in parts if p)
+    )
 
 
 def _walk(nodes):
@@ -797,11 +1116,11 @@ def _walk(nodes):
         yield from _walk(n["_children"])
 
 
-def render_page(user):
+def render_page(user, ctx=None):
     """Fetch `user`'s PRs and return (login, html_doc, pr_count).
 
     Raises PRViewerError on any fetch/GraphQL failure.
     """
     login, prs = fetch_prs(user)
     repo_groups = build_forest(prs)
-    return login, render_html(login, repo_groups), len(prs)
+    return login, render_html(login, repo_groups, ctx), len(prs)

@@ -28,6 +28,9 @@ The README was also vibecoded except for this sentence.
   JavaScript) written to a temp file and opened in your browser.
 - Can also run as a **local server** that re-renders the same page on each HTTP
   request — refresh the browser to get the latest state.
+- In server mode, lets you group PRs into **projects** — ordered lists of PRs
+  with notes, including closed and merged ones and other people's. See
+  [Projects](#projects) below.
 
 ## Requirements
 
@@ -53,6 +56,9 @@ python3 pr_viewer.py --user octocat
 
 # Write the HTML file but don't open a browser:
 python3 pr_viewer.py --no-open
+
+# Leave off the project chips entirely:
+python3 pr_viewer.py --no-projects
 ```
 
 The script prints the path to the generated HTML file, e.g.:
@@ -124,6 +130,57 @@ launchctl load   ~/Library/LaunchAgents/com.github-pr-viewer.server.plist
 launchctl kickstart -k gui/$(id -u)/com.github-pr-viewer.server
 ```
 
+## Projects
+
+A **project** is an ordered list of PRs with a note on each one — a place to
+keep "the four PRs for the Q3 migration, in the order they have to land, with
+why". Membership is manual, ordering is yours, and nothing reorders it but you.
+
+Unlike the home page, a project can hold **closed and merged PRs, and other
+people's PRs, in any repo you can read** — which is what makes it useful for a
+review queue or for a writeup after the fact.
+
+Three pages, all in server mode:
+
+- **Open PRs** (`/`) — the usual list, plus a chip on each row for every
+  project it's in, and a **+ Project** control to file it (into an existing
+  project or a brand new one) with a note, without leaving the page. The
+  header gains an **All / Uncategorized** filter; **Uncategorized** shows only
+  the open PRs that aren't in any project, which is the view you work down
+  when triaging. Both modes state the ratio, so a filtered view never lies by
+  omission.
+- **Projects** (`/projects`) — every project, most recently touched first, with
+  its PR count split into open/closed and its description. **+ New project**
+  creates one inline.
+- **Project detail** (`/projects/<id>`) — the main page. Reorder with **▲ ▼**
+  and **⤒** (move to top), edit notes in place, rename or describe the
+  project, add a PR by pasting a GitHub URL or `owner/repo#123`, and
+  **Hide/Show** closed PRs. Whether closed PRs are shown is remembered per
+  project and lives in the URL, so a link shows the recipient what you saw.
+
+Every control is a real form or link: no JavaScript is required for anything
+(the copy-branch button is still the one progressive extra). Every action posts
+and redirects, so refresh is always safe and back/forward behave.
+
+### Where your projects live
+
+Projects are stored in **`projects.json`** next to the code. It's
+`.gitignore`d, it's plain JSON you can read and diff, and it's yours to back
+up — the notes, descriptions, and ordering in it are the only things in this
+app that can't be re-fetched from GitHub. Writes are atomic, and a file the app
+can't parse is never overwritten: the home page falls back to a plain PR list
+with a warning, and every mutation refuses until the file is readable again.
+If it does get damaged, the projects page offers **Start a new projects file**,
+which renames the old one to `projects.json.corrupt-1` and starts an empty one
+— so you can still open the damaged file in an editor and copy your notes back
+out. Nothing is ever deleted.
+
+Point it somewhere else with `PR_VIEWER_STORE`:
+
+```bash
+PR_VIEWER_STORE=~/Dropbox/pr-projects.json python3 pr_server.py
+```
+
 ## How stacks are detected
 
 A PR is treated as a **child** of another open PR (in the same repo) when its
@@ -134,19 +191,35 @@ sorted by PR number for stable ordering.
 
 ## Limitations
 
-- Only **open** PRs are fetched (no closed/merged).
+- Only **open** PRs are fetched for the PR list (no closed/merged). Projects
+  are the exception: they fetch their own entries in any state.
 - Capped at the first **100** open PRs per user — there's no pagination yet.
 - No caching; every CLI run — and every server request — hits the GitHub API.
+  The **projects index issues two GitHub fetches** (one for every project's
+  entries, one for your open PRs to count the uncategorized ones); both degrade
+  to a partial page rather than an error if they fail.
 - No live auto-refresh: the CLI is one-shot (re-run to update), and in server
   mode a browser refresh re-fetches (no JS/websockets pushing updates).
+- The **CLI renders project chips but no controls** — it writes a static file,
+  so forms would post nowhere and filter links would 404. Use server mode to
+  actually manage projects, or `--no-projects` to drop the chips too.
 
 ## Project layout
 
 ```
 github-pr-viewer/
   pr_viewer.py            # CLI entry point (one-shot render + open browser)
-  pr_server.py            # local HTTP server entry point (stdlib http.server)
+  pr_server.py            # local HTTP server: routing, mutations, redirects
   pr_core.py              # shared engine: fetch, process, render HTML
+  pr_projects.py          # projects index / detail pages + the home additions
+  pr_store.py             # projects.json: load, save, project & entry CRUD
+  projects.json           # your projects (gitignored; created on first use)
+  test_pr_core.py         # checks, review state, pill combinations
+  test_pr_fetch.py        # the batched by-reference GitHub fetch
+  test_pr_store.py        # storage, ordering, atomic writes, corruption
+  test_pr_projects.py     # project page rendering
+  test_pr_home.py         # chips, the uncategorized filter, degradation
+  test_pr_server.py       # routing, POST/redirect/flash, cross-origin refusal
   scripts/
     install-launchagent.sh  # install/remove the macOS login LaunchAgent
     restart-server.sh       # restart the running LaunchAgent
@@ -157,4 +230,17 @@ github-pr-viewer/
   vibe-prompts/server/
     PROMPT.md             # the prompt for the CLI/server split
     PLAN.md               # the plan for that change
+  vibe-prompts/projects/
+    PROMPT.md             # the prompt for projects
+    UI.md                 # how the feature should operate
+    PLAN.md               # how the code gets there
+```
+
+## Tests
+
+Standard library `unittest`, no dependencies, no network — the GitHub calls are
+patched out:
+
+```bash
+python3 -m unittest discover
 ```

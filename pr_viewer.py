@@ -5,6 +5,11 @@ stacks/trees, render a self-contained HTML page, and open it in the browser.
 This is the one-shot command-line entry point. The reusable engine lives in
 `pr_core.py`; `pr_server.py` is a long-lived local server built on the same
 engine. See vibe-prompts/server/PLAN.md for the design.
+
+The page it writes is a static file, so it renders project **chips** —
+read-only and genuinely useful — but none of the projects controls: forms
+would post nowhere and filter links would 404. `--no-projects` gets you the
+pre-projects output.
 """
 
 import argparse
@@ -13,6 +18,8 @@ import tempfile
 import webbrowser
 
 import pr_core
+import pr_projects
+import pr_store
 
 
 def main():
@@ -29,10 +36,22 @@ def main():
         action="store_true",
         help="Write the HTML file but don't open it in a browser.",
     )
+    parser.add_argument(
+        "--no-projects",
+        action="store_true",
+        help="Omit project chips (the output this produced before projects existed).",
+    )
     args = parser.parse_args()
 
     try:
-        login, html_doc, count = pr_core.render_page(args.user)
+        if args.no_projects:
+            login, html_doc, count = pr_core.render_page(args.user)
+        else:
+            login, prs = pr_core.fetch_prs(args.user)
+            store, store_error = pr_store.load()
+            html_doc, count = pr_projects.render_home(
+                login, prs, store, store_error, {}, interactive=False
+            ), len(prs)
     except pr_core.PRViewerError as e:
         sys.exit(f"error: {e}")
 
