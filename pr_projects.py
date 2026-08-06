@@ -196,37 +196,13 @@ class _Flash:
             return links[0]
         return ", ".join(links[:-1]) + " and " + links[-1]
 
-    def edit_note_link(self):
-        """`Edit note`, into the project page — what §Home asks for after an
-        add. Only when exactly one project is named; with several, the project
-        links above already lead there."""
-        projects = self.projects()
-        if len(projects) != 1 or not self.repo():
-            return ""
-        anchor = "note-" + pr_core.row_anchor(self.repo(), _one(self.params, "pr"))
-        return (
-            f' <a href="{href(project_path(projects[0]["id"]), anchor=anchor)}">'
-            "Edit note</a>"
-        )
-
-
-def _f_added(f):
-    where = f.project_links() or "the project"
-    return f"#{f.pr()} added to {where}.{f.edit_note_link()}"
-
 
 FLASH = {
-    "added":    (False, _f_added),
+    # Only what the page can't already show you. An action that worked needs no
+    # announcement — the redirect lands on the row and the row is the proof —
+    # so the successful cases say nothing at all. What's left either reports a
+    # no-op, or explains something that happened off-screen.
     "exists":   (False, lambda f: f"#{f.pr()} is already in {f.project_links() or 'this project'}."),
-    "removed":  (False, lambda f: f"#{f.pr()} removed from the project. Its note is gone."),
-    "noted":    (False, lambda f: f"Note saved for #{f.pr()}."),
-    "moved":    (False, lambda f: f"Moved #{f.pr()}."),
-    # Names the project by id, not by spelling it into the query: `name` is the
-    # new-project form's field, and a flash must never pre-fill it.
-    "pmoved":   (False, lambda f: f"Moved {f.project_links() or 'the project'}."),
-    "created":  (False, lambda f: "Project created."),
-    "edited":   (False, lambda f: "Project updated."),
-    "deleted":  (False, lambda f: "Project deleted. The PRs themselves are untouched."),
     "badref":   (True,  lambda f: (
         "Couldn't find that PR — check the URL, or you may not have access to "
         "that repo."
@@ -245,7 +221,6 @@ FLASH = {
         "it as projects.json.corrupt-1 (or -2, -3…) — nothing was deleted."
     )),
     "gone":     (True,  lambda f: "That project no longer exists."),
-    "refetched": (False, lambda f: "Cache cleared — re-fetched from GitHub."),
     "unreadable": (True, lambda f: (
         "projects.json couldn't be read, so nothing was changed. The file has "
         "been left exactly as it is."

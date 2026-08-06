@@ -135,7 +135,7 @@ def post_create(form):
         return redirect_url(None, fallback, anchor="new-project",
                             flash="dupname", name=name, desc=description)
     project = pr_store.create_project(store, name, description)
-    return _saved(store, pr_projects.project_url(project["id"], flash="created"),
+    return _saved(store, pr_projects.project_url(project["id"]),
                   return_to, fallback)
 
 
@@ -153,8 +153,7 @@ def post_edit(form):
                               _field(form, "description"))
     except pr_store.StoreError:
         return redirect_url(return_to, fallback, flash="gone")
-    return _saved(store, redirect_url(return_to, fallback, flash="edited"),
-                  return_to, fallback)
+    return _saved(store, redirect_url(return_to, fallback), return_to, fallback)
 
 
 def post_delete(form):
@@ -166,7 +165,7 @@ def post_delete(form):
         pr_store.delete_project(store, _field(form, "project_id"))
     except pr_store.StoreError:
         return redirect_url(None, fallback, flash="gone")
-    return _saved(store, redirect_url(None, fallback, flash="deleted"), None, fallback)
+    return _saved(store, redirect_url(None, fallback), None, fallback)
 
 
 def post_project_move(form):
@@ -185,9 +184,7 @@ def post_project_move(form):
         return redirect_url(return_to, fallback, flash="gone")
     if not moved:
         return redirect_url(return_to, fallback, anchor=anchor)
-    return _saved(store,
-                  redirect_url(return_to, fallback, anchor=anchor,
-                               flash="pmoved", project=[project_id]),
+    return _saved(store, redirect_url(return_to, fallback, anchor=anchor),
                   return_to, fallback)
 
 
@@ -223,13 +220,13 @@ def post_add_pr(form):
         return redirect_url(return_to, fallback, flash="gone")
 
     anchor = pr_core.row_anchor(repo, number)
-    location = redirect_url(return_to, fallback, anchor=anchor,
-                            flash="added" if outcome == "added" else "exists",
-                            pr=number, repo=repo, project=[project_id])
     if outcome == "exists":
         # Not an error, and the existing note is untouched — nothing to save.
-        return location
-    return _saved(store, location, return_to, fallback)
+        # Still worth saying: unlike an add, this changed nothing.
+        return redirect_url(return_to, fallback, anchor=anchor, flash="exists",
+                            pr=number, repo=repo, project=[project_id])
+    return _saved(store, redirect_url(return_to, fallback, anchor=anchor),
+                  return_to, fallback)
 
 
 def post_entry_note(form):
@@ -245,9 +242,7 @@ def post_entry_note(form):
     except pr_store.StoreError:
         return redirect_url(return_to, fallback, flash="gone")
     anchor = pr_core.row_anchor(repo, number)
-    return _saved(store,
-                  redirect_url(return_to, fallback, anchor=anchor,
-                               flash="noted", pr=number),
+    return _saved(store, redirect_url(return_to, fallback, anchor=anchor),
                   return_to, fallback)
 
 
@@ -298,9 +293,7 @@ def post_entry_move(form):
         return redirect_url(return_to, fallback, flash="gone")
     if not moved:
         return redirect_url(return_to, fallback, anchor=anchor)
-    return _saved(store,
-                  redirect_url(return_to, fallback, anchor=anchor,
-                               flash="moved", pr=number),
+    return _saved(store, redirect_url(return_to, fallback, anchor=anchor),
                   return_to, fallback)
 
 
@@ -317,9 +310,7 @@ def post_entry_remove(form):
     except pr_store.StoreError:
         return redirect_url(return_to, fallback, flash="gone")
     # No anchor: the row it would name is exactly what just went away.
-    return _saved(store,
-                  redirect_url(return_to, fallback, flash="removed", pr=number),
-                  return_to, fallback)
+    return _saved(store, redirect_url(return_to, fallback), return_to, fallback)
 
 
 def post_add_to_projects(form):
@@ -359,14 +350,11 @@ def post_add_to_projects(form):
     # In uncategorized mode the row is about to disappear, so the form names
     # its successor; elsewhere the row itself is the right place to land.
     anchor = _field(form, "next_anchor") or pr_core.row_anchor(repo, number)
-    location = redirect_url(
-        return_to, fallback, anchor=anchor,
-        flash="added" if added else "exists", pr=number, repo=repo,
-        project=added or exists,
-    )
     if not added:
-        return location
-    return _saved(store, location, return_to, fallback)
+        return redirect_url(return_to, fallback, anchor=anchor, flash="exists",
+                            pr=number, repo=repo, project=exists)
+    return _saved(store, redirect_url(return_to, fallback, anchor=anchor),
+                  return_to, fallback)
 
 
 def post_recover(form):
@@ -390,10 +378,9 @@ def post_recover(form):
 def post_clear_cache(form):
     """↻ Refresh: empty the cache and land back on the page you were on, which
     re-fetches as it renders. No confirmation — nothing is lost that isn't one
-    GitHub call away."""
+    GitHub call away, and the re-rendered page is the result."""
     pr_cache.clear()                       # never raises; a failed unlink is a miss
-    return redirect_url(_field(form, "return_to"), pr_projects.HOME_PATH,
-                        flash="refetched")
+    return redirect_url(_field(form, "return_to"), pr_projects.HOME_PATH)
 
 
 POST_ROUTES = {

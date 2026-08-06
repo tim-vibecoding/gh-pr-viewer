@@ -19,18 +19,28 @@ from test_pr_projects import make_pr
 class RedirectUrlTest(unittest.TestCase):
     def test_flash_args_are_merged_into_the_return_path(self):
         out = pr_server.redirect_url("/projects/x?closed=show", "/projects",
-                                     anchor="pr-o-r-1", flash="added", pr=4821)
+                                     anchor="pr-o-r-1", flash="exists", pr=4821)
         parsed = urlparse(out)
         self.assertEqual(parsed.path, "/projects/x")
         self.assertEqual(parse_qs(parsed.query)["closed"], ["show"])
-        self.assertEqual(parse_qs(parsed.query)["flash"], ["added"])
+        self.assertEqual(parse_qs(parsed.query)["flash"], ["exists"])
         self.assertEqual(parsed.fragment, "pr-o-r-1")
 
     def test_an_old_flash_is_replaced_not_stacked(self):
-        out = pr_server.redirect_url("/projects/x?flash=moved&pr=1", "/projects",
-                                     flash="noted", pr=2)
-        self.assertEqual(parse_qs(urlparse(out).query)["flash"], ["noted"])
+        out = pr_server.redirect_url("/projects/x?flash=gone&pr=1", "/projects",
+                                     flash="exists", pr=2)
+        self.assertEqual(parse_qs(urlparse(out).query)["flash"], ["exists"])
         self.assertEqual(parse_qs(urlparse(out).query)["pr"], ["2"])
+
+    def test_a_flashless_redirect_clears_the_one_in_return_to(self):
+        """Every successful action redirects with no flash of its own, so the
+        stale code in `return_to` must not ride along and re-announce itself."""
+        out = pr_server.redirect_url("/projects/x?flash=exists&pr=1&closed=show",
+                                     "/projects")
+        query = parse_qs(urlparse(out).query)
+        self.assertNotIn("flash", query)
+        self.assertNotIn("pr", query)
+        self.assertEqual(query["closed"], ["show"])
 
     def test_offsite_return_to_falls_back(self):
         for evil in ("https://evil.example/x", "//evil.example/x", "javascript:x",
@@ -41,7 +51,7 @@ class RedirectUrlTest(unittest.TestCase):
             )
 
     def test_repeated_flash_args_survive(self):
-        out = pr_server.redirect_url("/", "/", flash="added", project=["a", "b"])
+        out = pr_server.redirect_url("/", "/", flash="exists", project=["a", "b"])
         self.assertEqual(parse_qs(urlparse(out).query)["project"], ["a", "b"])
 
 
@@ -99,7 +109,7 @@ class CreateTest(HandlerTestCase):
     def test_create_lands_on_the_new_project(self):
         location = pr_server.post_create({"name": ["Q3 migration"],
                                           "description": ["why"]})
-        self.assertEqual(self.flash_of(location), "created")
+        self.assertIsNone(self.flash_of(location))
         project = pr_store.projects(self.store())[0]
         self.assertEqual(project["name"], "Q3 migration")
         self.assertEqual(project["description"], "why")
@@ -119,7 +129,7 @@ class CreateTest(HandlerTestCase):
 
         form["confirm"] = ["1"]
         location = pr_server.post_create(form)
-        self.assertEqual(self.flash_of(location), "created")
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual(len(self.store()["projects"]), 2)
 
 
@@ -133,7 +143,7 @@ class ProjectMoveTest(HandlerTestCase):
         location = pr_server.post_project_move({
             "project_id": [b], "direction": ["up"], "return_to": ["/projects"],
         })
-        self.assertEqual(self.flash_of(location), "pmoved")
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual(urlparse(location).fragment, f"project-{b}")
         self.assertEqual(self._names(), ["B", "A"])
 
@@ -169,7 +179,7 @@ class EntryTest(HandlerTestCase):
             "project_id": [pid], "ref": ["https://github.com/khan/webapp/pull/4821"],
             "note": ["has to land first"], "return_to": [f"/projects/{pid}?closed=hide"],
         })
-        self.assertEqual(self.flash_of(location), "added")
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual(urlparse(location).fragment, "pr-khan-webapp-4821")
         entries = self.project(pid)["entries"]
         self.assertEqual(entries, [{"repo": "khan/webapp", "number": 4821,
@@ -210,7 +220,7 @@ class EntryTest(HandlerTestCase):
             "project_id": [pid], "repo": ["o/r"], "number": ["1"],
             "note": ["because Sam has context"],
         })
-        self.assertEqual(self.flash_of(location), "noted")
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual(self.project(pid)["entries"][0]["note"],
                          "because Sam has context")
 
@@ -219,7 +229,7 @@ class EntryTest(HandlerTestCase):
         location = pr_server.post_entry_remove({
             "project_id": [pid], "repo": ["o/r"], "number": ["1"],
         })
-        self.assertEqual(self.flash_of(location), "removed")
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual([e["number"] for e in self.project(pid)["entries"]], [2])
 
     def test_move_reorders_and_anchors_to_the_row(self):
@@ -228,7 +238,7 @@ class EntryTest(HandlerTestCase):
             "project_id": [pid], "repo": ["o/r"], "number": ["2"],
             "direction": ["up"], "closed": ["hide"],
         })
-        self.assertEqual(self.flash_of(location), "moved")
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual(urlparse(location).fragment, "pr-o-r-2")
         self.assertEqual([e["number"] for e in self.project(pid)["entries"]], [2, 1])
 
@@ -274,16 +284,25 @@ class AddToProjectsTest(HandlerTestCase):
             "repo": ["o/r"], "number": ["7"], "project_id": [a, b],
             "note": ["triage"], "return_to": ["/?filter=uncategorized"],
         })
-        self.assertEqual(self.flash_of(location), "added")
-        self.assertEqual(parse_qs(urlparse(location).query)["project"], [a, b])
+        self.assertIsNone(self.flash_of(location))
         for pid in (a, b):
             self.assertEqual(self.project(pid)["entries"][0]["note"], "triage")
+
+    def test_adding_where_it_already_is_says_so(self):
+        a = self.make_project("A", entries=[("o/r", 7, "original")])
+        location = pr_server.post_add_to_projects({
+            "repo": ["o/r"], "number": ["7"], "project_id": [a],
+            "note": ["clobber"], "return_to": ["/"],
+        })
+        self.assertEqual(self.flash_of(location), "exists")
+        self.assertEqual(parse_qs(urlparse(location).query)["project"], [a])
+        self.assertEqual(self.project(a)["entries"][0]["note"], "original")
 
     def test_a_new_project_name_creates_and_adds_in_one_action(self):
         location = pr_server.post_add_to_projects({
             "repo": ["o/r"], "number": ["7"], "new_project_name": ["Fresh"],
         })
-        self.assertEqual(self.flash_of(location), "added")
+        self.assertIsNone(self.flash_of(location))
         project = pr_store.projects(self.store())[0]
         self.assertEqual(project["name"], "Fresh")
         self.assertEqual(project["entries"][0]["number"], 7)
@@ -392,17 +411,18 @@ class ClearCacheTest(HandlerTestCase):
         parsed = urlparse(location)
         self.assertEqual(parsed.path, "/projects/x")
         self.assertEqual(parse_qs(parsed.query)["closed"], ["show"])
-        self.assertEqual(self.flash_of(location), "refetched")
+        # No confirmation: the re-rendered page *is* the result.
+        self.assertIsNone(self.flash_of(location))
         self.assertEqual(list(self.cache_dir.glob("*.json")), [])
         self.assertEqual(pr_cache.get("prs/@me"), (False, None))
 
     def test_no_return_to_falls_back_home(self):
         location = pr_server.post_clear_cache({})
         self.assertEqual(urlparse(location).path, pr_projects.HOME_PATH)
-        self.assertEqual(self.flash_of(location), "refetched")
+        self.assertIsNone(self.flash_of(location))
 
     def test_an_empty_cache_is_not_an_error(self):
-        self.assertEqual(self.flash_of(pr_server.post_clear_cache({})), "refetched")
+        self.assertIsNone(self.flash_of(pr_server.post_clear_cache({})))
 
 
 class WarmTest(HandlerTestCase):
@@ -563,7 +583,7 @@ class LiveServerTest(HandlerTestCase):
         status, location, _b = self.post("/cache/clear", {"return_to": f"/projects/{pid}"})
         self.assertEqual(status, 303)
         self.assertEqual(urlparse(location).path, f"/projects/{pid}")
-        self.assertEqual(parse_qs(urlparse(location).query)["flash"], ["refetched"])
+        self.assertNotIn("flash", parse_qs(urlparse(location).query))
 
     def test_an_oversized_body_is_refused(self):
         status, _l, _b = self.request(

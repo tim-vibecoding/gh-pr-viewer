@@ -362,34 +362,40 @@ class FlashTest(unittest.TestCase):
     def setUp(self):
         self.store = {"version": 1, "projects": [make_project(name="Q3 migration")]}
 
-    def test_added_names_the_project_and_links_to_edit_the_note(self):
-        params = {"flash": ["added"], "pr": ["4821"], "repo": ["khan/webapp"],
+    def test_exists_names_the_project_and_links_to_the_row(self):
+        params = {"flash": ["exists"], "pr": ["4821"], "repo": ["khan/webapp"],
                   "project": ["abc123"]}
         out = p.render_flash(params, self.store)
-        self.assertIn("#4821 added to", out)
+        self.assertIn("#4821 is already in", out)
         self.assertIn("Q3 migration", out)
-        self.assertIn("Edit note", out)
-        self.assertIn("#note-pr-khan-webapp-4821", out)
+        self.assertIn("#pr-khan-webapp-4821", out)
 
     def test_unknown_code_renders_nothing(self):
         self.assertEqual(p.render_flash({"flash": ["bogus"]}, self.store), "")
         self.assertEqual(p.render_flash({}, self.store), "")
 
     def test_arguments_are_escaped(self):
-        params = {"flash": ["added"], "pr": ["<img src=x onerror=1>"]}
+        params = {"flash": ["exists"], "pr": ["<img src=x onerror=1>"]}
         out = p.render_flash(params, self.store)
         self.assertNotIn("<img", out)
         self.assertIn("&lt;img", out)
 
     def test_a_deleted_project_id_does_not_break_the_message(self):
-        params = {"flash": ["added"], "pr": ["1"], "project": ["gone"]}
+        params = {"flash": ["exists"], "pr": ["1"], "project": ["gone"]}
         out = p.render_flash(params, self.store)
-        self.assertIn("#1 added to the project.", out)
+        self.assertIn("#1 is already in this project.", out)
 
     def test_error_codes_render_as_warnings(self):
         for code in ("badref", "unreadable", "savefail", "error", "gone"):
             out = p.render_flash({"flash": [code]}, self.store)
             self.assertIn('class="flash bad"', out, code)
+
+    def test_a_successful_action_says_nothing(self):
+        """The removed confirmations, by their old codes: an action that worked
+        is shown by the page it lands on, not announced above it."""
+        for code in ("added", "removed", "noted", "moved", "pmoved", "created",
+                     "edited", "deleted", "refetched"):
+            self.assertEqual(p.render_flash({"flash": [code]}, self.store), "", code)
 
 
 class DeletePageTest(unittest.TestCase):

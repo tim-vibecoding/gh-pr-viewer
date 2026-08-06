@@ -212,15 +212,22 @@ class CliModeTest(unittest.TestCase):
 
 
 class FlashOnHomeTest(unittest.TestCase):
-    def test_the_confirmation_sits_above_the_list_not_on_the_row(self):
+    def _store_and_params(self, code):
         store = store_with(("Q3 migration", [("o/r", 1)]))
-        project_id = store["projects"][0]["id"]
-        params = {"flash": ["added"], "pr": ["1"], "repo": ["o/r"],
-                  "project": [project_id]}
+        return store, {"flash": [code], "pr": ["1"], "repo": ["o/r"],
+                       "project": [store["projects"][0]["id"]]}
+
+    def test_the_message_sits_above_the_list_not_on_the_row(self):
+        store, params = self._store_and_params("exists")
         out = render([make_pr(1)], store, params=params)
-        self.assertIn("#1 added to", out)
-        self.assertIn("Edit note", out)
-        self.assertLess(out.index("added to"), out.index('id="pr-o-r-1"'))
+        self.assertIn("#1 is already in", out)
+        self.assertLess(out.index("is already in"), out.index('id="pr-o-r-1"'))
+
+    def test_a_successful_add_leaves_no_message_behind(self):
+        store, params = self._store_and_params("added")
+        out = render([make_pr(1)], store, params=params)
+        self.assertNotIn('class="flash"', out)
+        self.assertNotIn("added to", out)
 
 
 if __name__ == "__main__":
